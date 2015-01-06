@@ -374,6 +374,7 @@ func resourceAwsInstanceRead(d *schema.ResourceData, meta interface{}) error {
 			sgs[i] = sg.Name
 		}
 	}
+
 	d.Set("security_groups", sgs)
 
 	volIDs := make([]string, len(instance.BlockDevices))
@@ -410,18 +411,34 @@ func resourceAwsInstanceRead(d *schema.ResourceData, meta interface{}) error {
 func resourceAwsInstanceUpdate(d *schema.ResourceData, meta interface{}) error {
 	ec2conn := meta.(*AWSClient).ec2conn
 
-	modify := false
-	opts := new(ec2.ModifyInstance)
+	// We might need to do several modifies
+	// http://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyInstanceAttribute.html
+	// "Modifies the specified attribute of the specified instance. You can specify only one attribute at a time."
+
+	s := make([]*ec2.ModifyInstance, 0)
 
 	if v, ok := d.GetOk("source_dest_check"); ok {
+		opts := new(ec2.ModifyInstance)
 		opts.SourceDestCheck = v.(bool)
 		opts.SetSourceDestCheck = true
-		modify = true
+		s = append(s, opts)
 	}
 
-	if modify {
-		log.Printf("[INFO] Modifing instance %s: %#v", d.Id(), opts)
-		if _, err := ec2conn.ModifyInstance(d.Id(), opts); err != nil {
+	if v := d.Get("security_groups"); v != nil {
+		opts := new(ec2.ModifyInstance)
+		for _, v := range v.(*schema.Set).List() {
+			str := v.(string)
+
+			var g ec2.SecurityGroup
+			g.Id = str
+			opts.SecurityGroups = append(opts.SecurityGroups, g)
+		}
+		s = append(s, opts)
+	}
+
+	for _, item := range s {
+		log.Printf("[INFO] Modifing instance %s: %#v", d.Id(), item)
+		if _, err := ec2conn.ModifyInstance(d.Id(), item); err != nil {
 			return err
 		}
 
