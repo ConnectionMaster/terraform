@@ -411,11 +411,11 @@ func resourceAwsInstanceRead(d *schema.ResourceData, meta interface{}) error {
 func resourceAwsInstanceUpdate(d *schema.ResourceData, meta interface{}) error {
 	ec2conn := meta.(*AWSClient).ec2conn
 
-	// We might need to do several modifies
-	// http://docs.aws.amazon.com/AWSEC2/latest/APIReference/API_ModifyInstanceAttribute.html
-	// "Modifies the specified attribute of the specified instance. You can specify only one attribute at a time."
+	// We might need to do several calls (http://goo.gl/g3glRV):
+	// "Modifies the specified attribute of the specified instance. You can specify
+	// only one attribute at a time."
 
-	s := make([]*ec2.ModifyInstance, 0)
+	s := []*ec2.ModifyInstance{}
 
 	if v, ok := d.GetOk("source_dest_check"); ok {
 		opts := new(ec2.ModifyInstance)
@@ -436,9 +436,9 @@ func resourceAwsInstanceUpdate(d *schema.ResourceData, meta interface{}) error {
 		s = append(s, opts)
 	}
 
-	for _, item := range s {
-		log.Printf("[INFO] Modifing instance %s: %#v", d.Id(), item)
-		if _, err := ec2conn.ModifyInstance(d.Id(), item); err != nil {
+	for _, v := range s {
+		log.Printf("[INFO] Modifing instance %s: %#v", d.Id(), v)
+		if _, err := ec2conn.ModifyInstance(d.Id(), v); err != nil {
 			return err
 		}
 
