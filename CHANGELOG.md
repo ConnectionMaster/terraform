@@ -1,4 +1,25 @@
-## 0.3.6 (unreleased)
+## 0.3.7 (unreleased)
+
+IMPROVEMENTS:
+
+ * core: Formalized the syntax of interpolations and documented it
+     very heavily.
+ * core: Strings in interpolations can now contain further interpolations,
+     e.g.: `foo ${bar("${baz}")}`.
+ * provider/aws: Internet gateway supports tags [GH-720]
+
+BUG FIXES:
+
+ * core: Fixing use of remote state with plan files. [GH-741]
+ * core: Fix a panic case when certain invalid types were used in
+     the configuration. [GH-691]
+ * core: Escape characters `\"`, `\n`, and `\\` now work in interpolations.
+
+PLUGIN CHANGES:
+
+ * New `helper/schema` type: `TypeFloat` [GH-594]
+
+## 0.3.6 (January 6, 2015)
 
 FEATURES:
 
@@ -6,9 +27,12 @@ FEATURES:
 
 IMPROVEMENTS:
 
+  * **New resource: `aws_key_pair`** - Import a public key into AWS. [GH-695]
   * **New resource: `heroku_cert`** - Manage Heroku app certs.
   * provider/aws: Support `eu-central-1`, `cn-north-1`, and GovCloud. [GH-525]
   * provider/aws: `route_table` can have tags. [GH-648]
+  * provider/google: Support Ubuntu images. [GH-724]
+  * provider/google: Support for service accounts. [GH-725]
 
 BUG FIXES:
 
@@ -24,6 +48,7 @@ BUG FIXES:
       another module. [GH-659]
   * core: map overrides in "terraform.tfvars" no longer result in a syntax
       error. [GH-647]
+  * core: Colon character works in interpolation [GH-700]
   * provider/aws: Fix crash case when internet gateway is not attached
       to any VPC. [GH-664]
   * provider/aws: `vpc_id` is no longer required. [GH-667]
@@ -33,6 +58,13 @@ BUG FIXES:
       in more accurate diffs for AWS instances. [GH-712]
   * provider/aws: Fix panic case by using the wrong type when setting
       volume size for AWS instances. [GH-712]
+  * provider/aws: route table ignores routes with 'EnableVgwRoutePropagation'
+      origin since those come from gateways. [GH-722]
+  * provider/aws: Default network ACL ID and default security group ID
+      support for `aws_vpc`. [GH-704]
+  * provider/aws: Tags are not marked as computed. This introduces another
+      issue with not detecting external tags, but this will be fixed in
+      the future. [GH-730]
 
 ## 0.3.5 (December 9, 2014)
 

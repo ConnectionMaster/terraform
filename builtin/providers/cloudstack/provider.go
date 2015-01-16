@@ -14,24 +14,31 @@ func Provider() terraform.ResourceProvider {
 			"api_url": &schema.Schema{
 				Type:        schema.TypeString,
 				Required:    true,
-				DefaultFunc: envDefaultFunc("CLOUDSTACK_API_URL"),
+				DefaultFunc: envDefaultFunc("CLOUDSTACK_API_URL", nil),
 			},
 
 			"api_key": &schema.Schema{
 				Type:        schema.TypeString,
 				Required:    true,
-				DefaultFunc: envDefaultFunc("CLOUDSTACK_API_KEY"),
+				DefaultFunc: envDefaultFunc("CLOUDSTACK_API_KEY", nil),
 			},
 
 			"secret_key": &schema.Schema{
 				Type:        schema.TypeString,
 				Required:    true,
-				DefaultFunc: envDefaultFunc("CLOUDSTACK_SECRET_KEY"),
+				DefaultFunc: envDefaultFunc("CLOUDSTACK_SECRET_KEY", nil),
+			},
+
+			"timeout": &schema.Schema{
+				Type:        schema.TypeInt,
+				Required:    true,
+				DefaultFunc: envDefaultFunc("CLOUDSTACK_TIMEOUT", 180),
 			},
 		},
 
 		ResourcesMap: map[string]*schema.Resource{
 			"cloudstack_disk":             resourceCloudStackDisk(),
+			"cloudstack_egress_firewall":  resourceCloudStackEgressFirewall(),
 			"cloudstack_firewall":         resourceCloudStackFirewall(),
 			"cloudstack_instance":         resourceCloudStackInstance(),
 			"cloudstack_ipaddress":        resourceCloudStackIPAddress(),
@@ -52,17 +59,18 @@ func providerConfigure(d *schema.ResourceData) (interface{}, error) {
 		ApiURL:    d.Get("api_url").(string),
 		ApiKey:    d.Get("api_key").(string),
 		SecretKey: d.Get("secret_key").(string),
+		Timeout:   int64(d.Get("timeout").(int)),
 	}
 
 	return config.NewClient()
 }
 
-func envDefaultFunc(k string) schema.SchemaDefaultFunc {
+func envDefaultFunc(k string, dv interface{}) schema.SchemaDefaultFunc {
 	return func() (interface{}, error) {
 		if v := os.Getenv(k); v != "" {
 			return v, nil
 		}
 
-		return nil, nil
+		return dv, nil
 	}
 }
