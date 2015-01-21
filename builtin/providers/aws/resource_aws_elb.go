@@ -74,7 +74,6 @@ func resourceAwsElb() *schema.Resource {
 				Type:     schema.TypeSet,
 				Elem:     &schema.Schema{Type: schema.TypeString},
 				Optional: true,
-				ForceNew: true,
 				Computed: true,
 				Set: func(v interface{}) int {
 					return hashcode.String(v.(string))
@@ -328,7 +327,7 @@ func resourceAwsElbUpdate(d *schema.ResourceData, meta interface{}) error {
 		}
 		_, err := elbconn.ModifyLoadBalancerAttributes(&attrs)
 		if err != nil {
-			return fmt.Errorf("Failure configuring health check: %s", err)
+			return fmt.Errorf("Failure configuring cross zone balancing: %s", err)
 		}
 		d.SetPartial("cross_zone_load_balancing")
 	}
