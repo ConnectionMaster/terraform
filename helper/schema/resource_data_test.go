@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
@@ -615,6 +616,78 @@ func TestResourceDataGet(t *testing.T) {
 
 			Value: []interface{}{},
 		},
+
+		// #20 Float zero
+		{
+			Schema: map[string]*Schema{
+				"ratio": &Schema{
+					Type:     TypeFloat,
+					Optional: true,
+					Computed: true,
+				},
+			},
+
+			State: nil,
+
+			Diff: nil,
+
+			Key: "ratio",
+
+			Value: 0.0,
+		},
+
+		// #21 Float given
+		{
+			Schema: map[string]*Schema{
+				"ratio": &Schema{
+					Type:     TypeFloat,
+					Optional: true,
+					Computed: true,
+				},
+			},
+
+			State: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"ratio": "0.5",
+				},
+			},
+
+			Diff: nil,
+
+			Key: "ratio",
+
+			Value: 0.5,
+		},
+
+		// #22 Float diff
+		{
+			Schema: map[string]*Schema{
+				"ratio": &Schema{
+					Type:     TypeFloat,
+					Optional: true,
+					Computed: true,
+				},
+			},
+
+			State: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"ratio": "-0.5",
+				},
+			},
+
+			Diff: &terraform.InstanceDiff{
+				Attributes: map[string]*terraform.ResourceAttrDiff{
+					"ratio": &terraform.ResourceAttrDiff{
+						Old: "-0.5",
+						New: "33.0",
+					},
+				},
+			},
+
+			Key: "ratio",
+
+			Value: 33.0,
+		},
 	}
 
 	for i, tc := range cases {
@@ -755,7 +828,7 @@ func TestResourceDataGetOk(t *testing.T) {
 
 			Key:   "availability_zone",
 			Value: "",
-			Ok:    true,
+			Ok:    false,
 		},
 
 		{
@@ -886,6 +959,32 @@ func TestResourceDataGetOk(t *testing.T) {
 
 			Key:   "ports.0",
 			Value: 0,
+			Ok:    false,
+		},
+
+		{
+			Schema: map[string]*Schema{
+				"ports": &Schema{
+					Type:     TypeSet,
+					Optional: true,
+					Elem:     &Schema{Type: TypeInt},
+					Set:      func(a interface{}) int { return a.(int) },
+				},
+			},
+
+			State: nil,
+
+			Diff: &terraform.InstanceDiff{
+				Attributes: map[string]*terraform.ResourceAttrDiff{
+					"ports.#": &terraform.ResourceAttrDiff{
+						Old: "0",
+						New: "0",
+					},
+				},
+			},
+
+			Key:   "ports",
+			Value: []interface{}{},
 			Ok:    false,
 		},
 	}
@@ -1030,6 +1129,38 @@ func TestResourceDataHasChange(t *testing.T) {
 			Key: "ports",
 
 			Change: true,
+		},
+
+		// https://github.com/hashicorp/terraform/issues/927
+		{
+			Schema: map[string]*Schema{
+				"ports": &Schema{
+					Type:     TypeSet,
+					Optional: true,
+					Elem:     &Schema{Type: TypeInt},
+					Set:      func(a interface{}) int { return a.(int) },
+				},
+			},
+
+			State: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"ports.#":  "1",
+					"ports.80": "80",
+				},
+			},
+
+			Diff: &terraform.InstanceDiff{
+				Attributes: map[string]*terraform.ResourceAttrDiff{
+					"tags.foo": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "bar",
+					},
+				},
+			},
+
+			Key: "ports",
+
+			Change: false,
 		},
 	}
 
@@ -1411,6 +1542,51 @@ func TestResourceDataSet(t *testing.T) {
 
 				return v
 			},
+		},
+
+		// #12: List of floats, set list
+		{
+			Schema: map[string]*Schema{
+				"ratios": &Schema{
+					Type:     TypeList,
+					Computed: true,
+					Elem:     &Schema{Type: TypeFloat},
+				},
+			},
+
+			State: nil,
+
+			Diff: nil,
+
+			Key:   "ratios",
+			Value: []float64{1.0, 2.2, 5.5},
+
+			GetKey:   "ratios",
+			GetValue: []interface{}{1.0, 2.2, 5.5},
+		},
+
+		// #12: Set of floats, set list
+		{
+			Schema: map[string]*Schema{
+				"ratios": &Schema{
+					Type:     TypeSet,
+					Computed: true,
+					Elem:     &Schema{Type: TypeFloat},
+					Set: func(a interface{}) int {
+						return int(math.Float64bits(a.(float64)))
+					},
+				},
+			},
+
+			State: nil,
+
+			Diff: nil,
+
+			Key:   "ratios",
+			Value: []float64{1.0, 2.2, 5.5},
+
+			GetKey:   "ratios",
+			GetValue: []interface{}{1.0, 2.2, 5.5},
 		},
 	}
 
@@ -2375,6 +2551,45 @@ func TestResourceDataState(t *testing.T) {
 					"ports.10.index":    "10",
 					"ports.10.uuids.#":  "1",
 					"ports.10.uuids.80": "value",
+				},
+			},
+		},
+
+		// #24
+		{
+			Schema: map[string]*Schema{
+				"ports": &Schema{
+					Type:     TypeSet,
+					Optional: true,
+					Computed: true,
+					Elem:     &Schema{Type: TypeInt},
+					Set: func(a interface{}) int {
+						return a.(int)
+					},
+				},
+			},
+
+			State: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"ports.#":   "3",
+					"ports.100": "100",
+					"ports.80":  "80",
+					"ports.81":  "81",
+				},
+			},
+
+			Diff: &terraform.InstanceDiff{
+				Attributes: map[string]*terraform.ResourceAttrDiff{
+					"ports.#": &terraform.ResourceAttrDiff{
+						Old: "3",
+						New: "0",
+					},
+				},
+			},
+
+			Result: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"ports.#": "0",
 				},
 			},
 		},

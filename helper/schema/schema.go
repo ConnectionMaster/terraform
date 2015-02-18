@@ -11,8 +11,6 @@
 // A good starting point is to view the Provider structure.
 package schema
 
-//go:generate stringer -type=ValueType
-
 import (
 	"fmt"
 	"os"
@@ -24,47 +22,6 @@ import (
 	"github.com/hashicorp/terraform/terraform"
 	"github.com/mitchellh/mapstructure"
 )
-
-// ValueType is an enum of the type that can be represented by a schema.
-type ValueType int
-
-const (
-	TypeInvalid ValueType = iota
-	TypeBool
-	TypeInt
-	TypeFloat
-	TypeString
-	TypeList
-	TypeMap
-	TypeSet
-	typeObject
-)
-
-// Zero returns the zero value for a type.
-func (t ValueType) Zero() interface{} {
-	switch t {
-	case TypeInvalid:
-		return nil
-	case TypeBool:
-		return false
-	case TypeInt:
-		return 0
-	case TypeFloat:
-		return 0.0
-	case TypeString:
-		return ""
-	case TypeList:
-		return []interface{}{}
-	case TypeMap:
-		return map[string]interface{}{}
-	case TypeSet:
-		return nil
-	case typeObject:
-		return map[string]interface{}{}
-	default:
-		panic(fmt.Sprintf("unknown type %s", t))
-	}
-}
 
 // Schema is used to describe the structure of a value.
 //
@@ -78,6 +35,7 @@ type Schema struct {
 	//
 	//   TypeBool - bool
 	//   TypeInt - int
+	//   TypeFloat - float64
 	//   TypeString - string
 	//   TypeList - []interface{}
 	//   TypeMap - map[string]interface{}
@@ -102,7 +60,7 @@ type Schema struct {
 	//
 	// If Required is true above, then Default cannot be set. DefaultFunc
 	// can be set with Required. If the DefaultFunc returns nil, then there
-	// will no default and the user will be asked to fill it in.
+	// will be no default and the user will be asked to fill it in.
 	//
 	// If either of these is set, then the user won't be asked for input
 	// for this key if the default is not nil.
@@ -174,6 +132,21 @@ func EnvDefaultFunc(k string, dv interface{}) SchemaDefaultFunc {
 	}
 }
 
+// MultiEnvDefaultFunc is a helper function that returns the value of the first
+// environment variable in the given list that returns a non-empty value. If
+// none of the environment variables return a value, the default value is
+// returned.
+func MultiEnvDefaultFunc(ks []string, dv interface{}) SchemaDefaultFunc {
+	return func() (interface{}, error) {
+		for _, k := range ks {
+			if v := os.Getenv(k); v != "" {
+				return v, nil
+			}
+		}
+		return dv, nil
+	}
+}
+
 // SchemaSetFunc is a function that must return a unique ID for the given
 // element. This unique ID is used to store the element in a hash.
 type SchemaSetFunc func(interface{}) int
@@ -184,6 +157,24 @@ type SchemaStateFunc func(interface{}) string
 
 func (s *Schema) GoString() string {
 	return fmt.Sprintf("*%#v", *s)
+}
+
+// Returns a default value for this schema by either reading Default or
+// evaluating DefaultFunc. If neither of these are defined, returns nil.
+func (s *Schema) DefaultValue() (interface{}, error) {
+	if s.Default != nil {
+		return s.Default, nil
+	}
+
+	if s.DefaultFunc != nil {
+		defaultValue, err := s.DefaultFunc()
+		if err != nil {
+			return nil, fmt.Errorf("error loading default: %s", err)
+		}
+		return defaultValue, nil
+	}
+
+	return nil, nil
 }
 
 func (s *Schema) finalizeDiff(
@@ -358,27 +349,22 @@ func (m schemaMap) Input(
 			continue
 		}
 
-		// Skip if it has a default
-		if v.Default != nil {
-			continue
+		// Skip if it has a default value
+		defaultValue, err := v.DefaultValue()
+		if err != nil {
+			return nil, fmt.Errorf("%s: error loading default: %s", k, err)
 		}
-		if f := v.DefaultFunc; f != nil {
-			value, err := f()
-			if err != nil {
-				return nil, fmt.Errorf(
-					"%s: error loading default: %s", k, err)
-			}
-			if value != nil {
-				continue
-			}
+		if defaultValue != nil {
+			continue
 		}
 
 		var value interface{}
-		var err error
 		switch v.Type {
 		case TypeBool:
 			fallthrough
 		case TypeInt:
+			fallthrough
+		case TypeFloat:
 			fallthrough
 		case TypeString:
 			value, err = m.inputString(input, k, v)
@@ -675,10 +661,10 @@ func (m schemaMap) diffMap(
 
 	// Now we compare, preferring values from the config map
 	for k, v := range configMap {
-		old := stateMap[k]
+		old, ok := stateMap[k]
 		delete(stateMap, k)
 
-		if old == v && !all {
+		if old == v && ok && !all {
 			continue
 		}
 
@@ -716,6 +702,7 @@ func (m schemaMap) diffSet(
 		return nil
 	}
 
+	oRaw := o
 	if o == nil {
 		o = &Set{F: schema.Set}
 	}
@@ -764,7 +751,7 @@ func (m schemaMap) diffSet(
 
 	// If the counts are not the same, then record that diff
 	changed := oldLen != newLen
-	if changed || all {
+	if changed || all || oRaw == nil {
 		countSchema := &Schema{
 			Type:     TypeInt,
 			Computed: schema.Computed,
@@ -820,24 +807,18 @@ func (m schemaMap) diffString(
 	var originalN interface{}
 	var os, ns string
 	o, n, _, _ := d.diffChange(k)
-	if n == nil {
-		n = schema.Default
-		if schema.DefaultFunc != nil {
-			var err error
-			n, err = schema.DefaultFunc()
-			if err != nil {
-				return fmt.Errorf("%s, error loading default: %s", k, err)
-			}
-		}
-	}
 	if schema.StateFunc != nil {
 		originalN = n
 		n = schema.StateFunc(n)
 	}
+	nraw := n
+	if nraw == nil {
+		nraw = schema.Type.Zero()
+	}
 	if err := mapstructure.WeakDecode(o, &os); err != nil {
 		return fmt.Errorf("%s: %s", k, err)
 	}
-	if err := mapstructure.WeakDecode(n, &ns); err != nil {
+	if err := mapstructure.WeakDecode(nraw, &ns); err != nil {
 		return fmt.Errorf("%s: %s", k, err)
 	}
 
@@ -1068,6 +1049,12 @@ func (m schemaMap) validatePrimitive(
 		if err := mapstructure.WeakDecode(raw, &n); err != nil {
 			return nil, []error{err}
 		}
+	case TypeFloat:
+		// Verify that we can parse this as an int
+		var n float64
+		if err := mapstructure.WeakDecode(raw, &n); err != nil {
+			return nil, []error{err}
+		}
 	case TypeString:
 		// Verify that we can parse this as a string
 		var n string
@@ -1095,5 +1082,31 @@ func (m schemaMap) validateType(
 		return m.validateMap(k, raw, schema, c)
 	default:
 		return m.validatePrimitive(k, raw, schema, c)
+	}
+}
+
+// Zero returns the zero value for a type.
+func (t ValueType) Zero() interface{} {
+	switch t {
+	case TypeInvalid:
+		return nil
+	case TypeBool:
+		return false
+	case TypeInt:
+		return 0
+	case TypeFloat:
+		return 0.0
+	case TypeString:
+		return ""
+	case TypeList:
+		return []interface{}{}
+	case TypeMap:
+		return map[string]interface{}{}
+	case TypeSet:
+		return new(Set)
+	case typeObject:
+		return map[string]interface{}{}
+	default:
+		panic(fmt.Sprintf("unknown type %s", t))
 	}
 }

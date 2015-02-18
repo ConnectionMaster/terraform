@@ -11,6 +11,51 @@ func TestDiffFieldReader_impl(t *testing.T) {
 	var _ FieldReader = new(DiffFieldReader)
 }
 
+// https://github.com/hashicorp/terraform/issues/914
+func TestDiffFieldReader_MapHandling(t *testing.T) {
+	schema := map[string]*Schema{
+		"tags": &Schema{
+			Type: TypeMap,
+		},
+	}
+	r := &DiffFieldReader{
+		Schema: schema,
+		Diff: &terraform.InstanceDiff{
+			Attributes: map[string]*terraform.ResourceAttrDiff{
+				"tags.#": &terraform.ResourceAttrDiff{
+					Old: "1",
+					New: "2",
+				},
+				"tags.baz": &terraform.ResourceAttrDiff{
+					Old: "",
+					New: "qux",
+				},
+			},
+		},
+		Source: &MapFieldReader{
+			Schema: schema,
+			Map: BasicMapReader(map[string]string{
+				"tags.#":   "1",
+				"tags.foo": "bar",
+			}),
+		},
+	}
+
+	result, err := r.ReadField([]string{"tags"})
+	if err != nil {
+		t.Fatalf("ReadField failed: %#v", err)
+	}
+
+	expected := map[string]interface{}{
+		"foo": "bar",
+		"baz": "qux",
+	}
+
+	if !reflect.DeepEqual(expected, result.Value) {
+		t.Fatalf("bad: DiffHandling\n\nexpected: %#v\n\ngot: %#v\n\n", expected, result.Value)
+	}
+}
+
 func TestDiffFieldReader_extra(t *testing.T) {
 	schema := map[string]*Schema{
 		"stringComputed": &Schema{Type: TypeString},
@@ -25,6 +70,28 @@ func TestDiffFieldReader_extra(t *testing.T) {
 		"mapRemove": &Schema{Type: TypeMap},
 
 		"setChange": &Schema{
+			Type:     TypeSet,
+			Optional: true,
+			Elem: &Resource{
+				Schema: map[string]*Schema{
+					"index": &Schema{
+						Type:     TypeInt,
+						Required: true,
+					},
+
+					"value": &Schema{
+						Type:     TypeString,
+						Required: true,
+					},
+				},
+			},
+			Set: func(a interface{}) int {
+				m := a.(map[string]interface{})
+				return m["index"].(int)
+			},
+		},
+
+		"setEmpty": &Schema{
 			Type:     TypeSet,
 			Optional: true,
 			Elem: &Resource{
@@ -69,6 +136,11 @@ func TestDiffFieldReader_extra(t *testing.T) {
 					Old: "50",
 					New: "80",
 				},
+
+				"setEmpty.#": &terraform.ResourceAttrDiff{
+					Old: "2",
+					New: "0",
+				},
 			},
 		},
 
@@ -86,6 +158,12 @@ func TestDiffFieldReader_extra(t *testing.T) {
 				"setChange.#":        "1",
 				"setChange.10.index": "10",
 				"setChange.10.value": "50",
+
+				"setEmpty.#":        "2",
+				"setEmpty.10.index": "10",
+				"setEmpty.10.value": "50",
+				"setEmpty.20.index": "20",
+				"setEmpty.20.value": "50",
 			}),
 		},
 	}
@@ -142,6 +220,15 @@ func TestDiffFieldReader_extra(t *testing.T) {
 						"value": "80",
 					},
 				},
+				Exists: true,
+			},
+			false,
+		},
+
+		"setEmpty": {
+			[]string{"setEmpty"},
+			FieldReadResult{
+				Value:  []interface{}{},
 				Exists: true,
 			},
 			false,

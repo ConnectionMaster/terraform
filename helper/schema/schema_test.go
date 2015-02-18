@@ -1,12 +1,15 @@
 package schema
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"reflect"
 	"testing"
 
 	"github.com/hashicorp/terraform/config"
 	"github.com/hashicorp/terraform/config/lang/ast"
+	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/terraform"
 )
 
@@ -40,6 +43,63 @@ func TestEnvDefaultFunc(t *testing.T) {
 	}
 }
 
+func TestMultiEnvDefaultFunc(t *testing.T) {
+	keys := []string{
+		"TF_TEST_MULTI_ENV_DEFAULT_FUNC1",
+		"TF_TEST_MULTI_ENV_DEFAULT_FUNC2",
+	}
+	defer func() {
+		for _, k := range keys {
+			os.Unsetenv(k)
+		}
+	}()
+
+	// Test that the first key is returned first
+	f := MultiEnvDefaultFunc(keys, "42")
+	if err := os.Setenv(keys[0], "foo"); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	actual, err := f()
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if actual != "foo" {
+		t.Fatalf("bad: %#v", actual)
+	}
+
+	if err := os.Unsetenv(keys[0]); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Test that the second key is returned if the first one is empty
+	f = MultiEnvDefaultFunc(keys, "42")
+	if err := os.Setenv(keys[1], "foo"); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	actual, err = f()
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if actual != "foo" {
+		t.Fatalf("bad: %#v", actual)
+	}
+
+	if err := os.Unsetenv(keys[1]); err != nil {
+		t.Fatalf("err: %s", err)
+	}
+
+	// Test that the default value is returned when no keys are set
+	actual, err = f()
+	if err != nil {
+		t.Fatalf("err: %s", err)
+	}
+	if actual != "42" {
+		t.Fatalf("bad: %#v", actual)
+	}
+}
+
 func TestValueType_Zero(t *testing.T) {
 	cases := []struct {
 		Type  ValueType
@@ -51,7 +111,7 @@ func TestValueType_Zero(t *testing.T) {
 		{TypeString, ""},
 		{TypeList, []interface{}{}},
 		{TypeMap, map[string]interface{}{}},
-		{TypeSet, nil},
+		{TypeSet, new(Set)},
 	}
 
 	for i, tc := range cases {
@@ -1829,6 +1889,212 @@ func TestSchemaMap_Diff(t *testing.T) {
 
 			Err: false,
 		},
+
+		// #47 - https://github.com/hashicorp/terraform/issues/824
+		{
+			Schema: map[string]*Schema{
+				"block_device": &Schema{
+					Type:     TypeSet,
+					Optional: true,
+					Computed: true,
+					Elem: &Resource{
+						Schema: map[string]*Schema{
+							"device_name": &Schema{
+								Type:     TypeString,
+								Required: true,
+							},
+							"delete_on_termination": &Schema{
+								Type:     TypeBool,
+								Optional: true,
+								Default:  true,
+							},
+						},
+					},
+					Set: func(v interface{}) int {
+						var buf bytes.Buffer
+						m := v.(map[string]interface{})
+						buf.WriteString(fmt.Sprintf("%s-", m["device_name"].(string)))
+						buf.WriteString(fmt.Sprintf("%t-", m["delete_on_termination"].(bool)))
+						return hashcode.String(buf.String())
+					},
+				},
+			},
+
+			State: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"block_device.#":                                "2",
+					"block_device.616397234.delete_on_termination":  "true",
+					"block_device.616397234.device_name":            "/dev/sda1",
+					"block_device.2801811477.delete_on_termination": "true",
+					"block_device.2801811477.device_name":           "/dev/sdx",
+				},
+			},
+
+			Config: map[string]interface{}{
+				"block_device": []map[string]interface{}{
+					map[string]interface{}{
+						"device_name": "/dev/sda1",
+					},
+					map[string]interface{}{
+						"device_name": "/dev/sdx",
+					},
+				},
+			},
+			Diff: nil,
+			Err:  false,
+		},
+
+		// #48 - Zero value in state shouldn't result in diff
+		{
+			Schema: map[string]*Schema{
+				"port": &Schema{
+					Type:     TypeBool,
+					Optional: true,
+					ForceNew: true,
+				},
+			},
+
+			State: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"port": "false",
+				},
+			},
+
+			Config: map[string]interface{}{},
+
+			Diff: nil,
+
+			Err: false,
+		},
+
+		// #49 Set - Same as #47 but for sets
+		{
+			Schema: map[string]*Schema{
+				"route": &Schema{
+					Type:     TypeSet,
+					Optional: true,
+					Elem: &Resource{
+						Schema: map[string]*Schema{
+							"index": &Schema{
+								Type:     TypeInt,
+								Required: true,
+							},
+
+							"gateway": &Schema{
+								Type:     TypeSet,
+								Optional: true,
+								Elem:     &Schema{Type: TypeInt},
+								Set: func(a interface{}) int {
+									return a.(int)
+								},
+							},
+						},
+					},
+					Set: func(v interface{}) int {
+						m := v.(map[string]interface{})
+						return m["index"].(int)
+					},
+				},
+			},
+
+			State: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"route.#": "0",
+				},
+			},
+
+			Config: map[string]interface{}{},
+
+			Diff: nil,
+
+			Err: false,
+		},
+
+		// #50 - A set computed element shouldn't cause a diff
+		{
+			Schema: map[string]*Schema{
+				"active": &Schema{
+					Type:     TypeBool,
+					Computed: true,
+					ForceNew: true,
+				},
+			},
+
+			State: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"active": "true",
+				},
+			},
+
+			Config: map[string]interface{}{},
+
+			Diff: nil,
+
+			Err: false,
+		},
+
+		// #51 - An empty set should show up in the diff
+		{
+			Schema: map[string]*Schema{
+				"instances": &Schema{
+					Type:     TypeSet,
+					Elem:     &Schema{Type: TypeString},
+					Optional: true,
+					ForceNew: true,
+					Set: func(v interface{}) int {
+						return len(v.(string))
+					},
+				},
+			},
+
+			State: nil,
+
+			Config: map[string]interface{}{},
+
+			Diff: &terraform.InstanceDiff{
+				Attributes: map[string]*terraform.ResourceAttrDiff{
+					"instances.#": &terraform.ResourceAttrDiff{
+						Old:         "0",
+						New:         "0",
+						RequiresNew: true,
+					},
+				},
+			},
+
+			Err: false,
+		},
+
+		// #52 - Map with empty value
+		{
+			Schema: map[string]*Schema{
+				"vars": &Schema{
+					Type: TypeMap,
+				},
+			},
+
+			State: nil,
+
+			Config: map[string]interface{}{
+				"vars": map[string]interface{}{
+					"foo": "",
+				},
+			},
+
+			Diff: &terraform.InstanceDiff{
+				Attributes: map[string]*terraform.ResourceAttrDiff{
+					"vars.#": &terraform.ResourceAttrDiff{
+						Old: "0",
+						New: "1",
+					},
+					"vars.foo": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "",
+					},
+				},
+			},
+
+			Err: false,
+		},
 	}
 
 	for i, tc := range cases {
@@ -1861,7 +2127,7 @@ func TestSchemaMap_Diff(t *testing.T) {
 }
 
 func TestSchemaMap_Input(t *testing.T) {
-	cases := []struct {
+	cases := map[string]struct {
 		Schema map[string]*Schema
 		Config map[string]interface{}
 		Input  map[string]string
@@ -1872,7 +2138,7 @@ func TestSchemaMap_Input(t *testing.T) {
 		 * String decode
 		 */
 
-		{
+		"uses input on optional field with no config": {
 			Schema: map[string]*Schema{
 				"availability_zone": &Schema{
 					Type:     TypeString,
@@ -1891,7 +2157,7 @@ func TestSchemaMap_Input(t *testing.T) {
 			Err: false,
 		},
 
-		{
+		"input ignored when config has a value": {
 			Schema: map[string]*Schema{
 				"availability_zone": &Schema{
 					Type:     TypeString,
@@ -1912,7 +2178,7 @@ func TestSchemaMap_Input(t *testing.T) {
 			Err: false,
 		},
 
-		{
+		"input ignored when schema has a default": {
 			Schema: map[string]*Schema{
 				"availability_zone": &Schema{
 					Type:     TypeString,
@@ -1930,7 +2196,7 @@ func TestSchemaMap_Input(t *testing.T) {
 			Err: false,
 		},
 
-		{
+		"input ignored when default function returns a value": {
 			Schema: map[string]*Schema{
 				"availability_zone": &Schema{
 					Type: TypeString,
@@ -1950,7 +2216,7 @@ func TestSchemaMap_Input(t *testing.T) {
 			Err: false,
 		},
 
-		{
+		"input used when default function returns nil": {
 			Schema: map[string]*Schema{
 				"availability_zone": &Schema{
 					Type: TypeString,
@@ -1991,11 +2257,11 @@ func TestSchemaMap_Input(t *testing.T) {
 
 		actual, err := schemaMap(tc.Schema).Input(input, rc)
 		if (err != nil) != tc.Err {
-			t.Fatalf("#%d err: %s", i, err)
+			t.Fatalf("#%v err: %s", i, err)
 		}
 
 		if !reflect.DeepEqual(tc.Result, actual.Config) {
-			t.Fatalf("#%d: bad:\n\n%#v", i, actual.Config)
+			t.Fatalf("#%v: bad:\n\ngot: %#v\nexpected: %#v", i, actual.Config, tc.Result)
 		}
 	}
 }

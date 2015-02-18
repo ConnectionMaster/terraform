@@ -21,7 +21,7 @@ func resourceAwsDbInstance() *schema.Resource {
 		Schema: map[string]*schema.Schema{
 			"name": &schema.Schema{
 				Type:     schema.TypeString,
-				Required: true,
+				Optional: true,
 				ForceNew: true,
 			},
 
@@ -55,6 +55,13 @@ func resourceAwsDbInstance() *schema.Resource {
 				ForceNew: true,
 			},
 
+			"storage_type": &schema.Schema{
+				Type:     schema.TypeString,
+				Optional: true,
+				Computed: true,
+				ForceNew: true,
+			},
+
 			"identifier": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
@@ -70,18 +77,21 @@ func resourceAwsDbInstance() *schema.Resource {
 			"availability_zone": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
+				Computed: true,
 				ForceNew: true,
 			},
 
 			"backup_retention_period": &schema.Schema{
 				Type:     schema.TypeInt,
 				Optional: true,
+				Computed: true,
 				ForceNew: true,
 			},
 
 			"backup_window": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
+				Computed: true,
 				ForceNew: true,
 			},
 
@@ -94,18 +104,21 @@ func resourceAwsDbInstance() *schema.Resource {
 			"maintenance_window": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
+				Computed: true,
 				ForceNew: true,
 			},
 
 			"multi_az": &schema.Schema{
 				Type:     schema.TypeBool,
 				Optional: true,
+				Computed: true,
 				ForceNew: true,
 			},
 
 			"port": &schema.Schema{
 				Type:     schema.TypeInt,
 				Optional: true,
+				Computed: true,
 				ForceNew: true,
 			},
 
@@ -133,12 +146,6 @@ func resourceAwsDbInstance() *schema.Resource {
 				},
 			},
 
-			"skip_final_snapshot": &schema.Schema{
-				Type:     schema.TypeBool,
-				Optional: true,
-				ForceNew: true,
-			},
-
 			"final_snapshot_identifier": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
@@ -154,6 +161,7 @@ func resourceAwsDbInstance() *schema.Resource {
 			"parameter_group_name": &schema.Schema{
 				Type:     schema.TypeString,
 				Optional: true,
+				Computed: true,
 				ForceNew: true,
 			},
 
@@ -189,9 +197,9 @@ func resourceAwsDbInstanceCreate(d *schema.ResourceData, meta interface{}) error
 		EngineVersion:        d.Get("engine_version").(string),
 	}
 
-	// Special treatment for the password, as we don't want that
-	// saved into the state file
-	d.Set("password", "")
+	if attr, ok := d.GetOk("storage_type"); ok {
+		opts.StorageType = attr.(string)
+	}
 
 	if attr, ok := d.GetOk("backup_retention_period"); ok {
 		opts.BackupRetentionPeriod = attr.(int)
@@ -299,6 +307,7 @@ func resourceAwsDbInstanceRead(d *schema.ResourceData, meta interface{}) error {
 	d.Set("engine", v.Engine)
 	d.Set("engine_version", v.EngineVersion)
 	d.Set("allocated_storage", v.AllocatedStorage)
+	d.Set("storage_type", v.StorageType)
 	d.Set("instance_class", v.DBInstanceClass)
 	d.Set("availability_zone", v.AvailabilityZone)
 	d.Set("backup_retention_period", v.BackupRetentionPeriod)
@@ -344,10 +353,11 @@ func resourceAwsDbInstanceDelete(d *schema.ResourceData, meta interface{}) error
 
 	opts := rds.DeleteDBInstance{DBInstanceIdentifier: d.Id()}
 
-	if d.Get("skip_final_snapshot").(bool) {
+	finalSnapshot := d.Get("final_snapshot_identifier").(string)
+	if finalSnapshot == "" {
 		opts.SkipFinalSnapshot = true
 	} else {
-		opts.FinalDBSnapshotIdentifier = d.Get("final_snapshot_identifier").(string)
+		opts.FinalDBSnapshotIdentifier = finalSnapshot
 	}
 
 	log.Printf("[DEBUG] DB Instance destroy configuration: %v", opts)
