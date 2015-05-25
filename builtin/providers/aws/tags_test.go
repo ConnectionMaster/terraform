@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/awslabs/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/goamz/ec2"
 )
 
 func TestDiffTags(t *testing.T) {
@@ -63,7 +63,7 @@ func TestDiffTags(t *testing.T) {
 
 // testAccCheckTags can be used to check the tags on a resource.
 func testAccCheckTags(
-	ts *[]ec2.Tag, key string, value string) resource.TestCheckFunc {
+	ts *[]*ec2.Tag, key string, value string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		m := tagsToMap(*ts)
 		v, ok := m[key]

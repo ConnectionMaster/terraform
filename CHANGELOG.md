@@ -1,4 +1,390 @@
-## 0.3.7 (unreleased)
+## 0.5.3 (Unreleased)
+
+IMPROVEMENTS:
+
+  * **New resource: `aws_sqs_queue`** [GH-1939]
+  * provider/aws: support ec2 termination protection [GH-1988]
+  * provider/aws: support for RDS Read Replicas [GH-1946]
+  * provider/aws: `aws_s3_bucket` add support for `policy` [GH-1992]
+  * provider/aws: New `force_destroy` parameter for S3 buckets, to destroy 
+      Buckets that contain objects [GH-2007]
+
+BUG FIXES:
+
+  * provider/aws: Correctly handle AWS keypairs which no longer exist [GH-2032]
+  * provisioner/remote-exec: Don't prepend shebang on scripts that already
+      have one [GH-2041]
+
+## 0.5.2 (May 15, 2015)
+
+FEATURES:
+
+  * **Chef provisioning**: You can now provision new hosts (both Linux and
+     Windows) with [Chef](https://chef.io) using a native provisioner [GH-1868]
+
+IMPROVEMENTS:
+
+  * **New config function: `formatlist`** - Format lists in a similar way to `format`.
+    Useful for creating URLs from a list of IPs. [GH-1829]
+  * **New resource: `aws_route53_zone_association`**
+  * provider/aws: `aws_autoscaling_group` can wait for capacity in ELB
+      via `min_elb_capacity` [GH-1970]
+  * provider/aws: `aws_db_instances` supports `license_model` [GH-1966]
+  * provider/aws: `aws_elasticache_cluster` add support for Tags [GH-1965]
+  * provider/aws: `aws_network_acl` Network ACLs can be applied to multiple subnets [GH-1931]
+  * provider/aws: `aws_s3_bucket` exports `hosted_zone_id` and `region` [GH-1865]
+  * provider/aws: `aws_s3_bucket` add support for website `redirect_all_requests_to` [GH-1909]
+  * provider/aws: `aws_route53_record` exports `fqdn` [GH-1847]
+  * provider/aws: `aws_route53_zone` can create private hosted zones [GH-1526]
+  * provider/google: `google_compute_instance` `scratch` attribute added [GH-1920]
+
+BUG FIXES:
+
+  * core: fix "resource not found" for interpolation issues with modules
+  * core: fix unflattenable error for orphans [GH-1922]
+  * core: fix deadlock with create-before-destroy + modules [GH-1949]
+  * core: fix "no roots found" error with create-before-destroy [GH-1953]
+  * core: variables set with environment variables won't validate as
+      not set without a default [GH-1930]
+  * core: resources with a blank ID in the state are now assumed to not exist [GH-1905]
+  * command/push: local vars override remote ones [GH-1881]
+  * provider/aws: Mark `aws_security_group` description as `ForceNew` [GH-1871]
+  * provider/aws: `aws_db_instance` ARN value is correct [GH-1910]
+  * provider/aws: `aws_db_instance` only submit modify request if there
+      is a change. [GH-1906]
+  * provider/aws: `aws_elasticache_cluster` export missing information on cluster nodes [GH-1965]
+  * provider/aws: bad AMI on a launch configuration won't block refresh [GH-1901]
+  * provider/aws: `aws_security_group` + `aws_subnet` - destroy timeout increased
+    to prevent DependencyViolation errors. [GH-1886]
+  * provider/google: `google_compute_instance` Local SSDs no-longer cause crash
+      [GH-1088]
+  * provider/google: `google_http_health_check` Defaults now driven from Terraform,
+      avoids errors on update [GH-1894]
+  * provider/google: `google_compute_template` Update Instance Template network
+      definition to match changes to Instance [GH-980]
+  * provider/template: Fix infinite diff [GH-1898]
+
+## 0.5.1 (never released)
+
+This version was never released since we accidentally skipped it!
+
+## 0.5.0 (May 7, 2015)
+
+BACKWARDS INCOMPATIBILITIES:
+
+  * provider/aws: Terraform now remove the default egress rule created by AWS in
+    a new security group.
+
+FEATURES:
+
+  * **Multi-provider (a.k.a multi-region)**: Multiple instances of a single
+     provider can be configured so resources can apply to different settings.
+     As an example, this allows Terraform to manage multiple regions with AWS.
+  * **Environmental variables to set variables**: Environment variables can be
+     used to set variables. The environment variables must be in the format
+     `TF_VAR_name` and this will be checked last for a value.
+  * **New remote state backend: `s3`**: You can now store remote state in
+     an S3 bucket. [GH-1723]
+  * **Automatic AWS retries**: This release includes a lot of improvement
+     around automatic retries of transient errors in AWS. The number of
+     retry attempts is also configurable.
+  * **Templates**: A new `template_file` resource allows long strings needing
+     variable interpolation to be moved into files. [GH-1778]
+  * **Provision with WinRM**: Provisioners can now run remote commands on
+     Windows hosts. [GH-1483]
+
+IMPROVEMENTS:
+
+  * **New config function: `length`** - Get the length of a string or a list.
+      Useful in conjunction with `split`. [GH-1495]
+  * **New resource: `aws_app_cookie_stickiness_policy`**
+  * **New resource: `aws_customer_gateway`**
+  * **New resource: `aws_ebs_volume`**
+  * **New resource: `aws_elasticache_cluster`**
+  * **New resource: `aws_elasticache_security_group`**
+  * **New resource: `aws_elasticache_subnet_group`**
+  * **New resource: `aws_iam_access_key`**
+  * **New resource: `aws_iam_group_policy`**
+  * **New resource: `aws_iam_group`**
+  * **New resource: `aws_iam_instance_profile`**
+  * **New resource: `aws_iam_policy`**
+  * **New resource: `aws_iam_role_policy`**
+  * **New resource: `aws_iam_role`**
+  * **New resource: `aws_iam_user_policy`**
+  * **New resource: `aws_iam_user`**
+  * **New resource: `aws_lb_cookie_stickiness_policy`**
+  * **New resource: `aws_proxy_protocol_policy`**
+  * **New resource: `aws_security_group_rule`**
+  * **New resource: `aws_vpc_dhcp_options_association`**
+  * **New resource: `aws_vpc_dhcp_options`**
+  * **New resource: `aws_vpn_connection_route`**
+  * **New resource: `google_dns_managed_zone`**
+  * **New resource: `google_dns_record_set`**
+  * **Migrate to upstream AWS SDK:** Migrate the AWS provider to
+      [awslabs/aws-sdk-go](https://github.com/awslabs/aws-sdk-go),
+      the offical `awslabs` library. Previously we had forked the library for
+      stability while `awslabs` refactored. Now that work has completed, and we've
+      migrated back to the upstream version.
+  * core: Improve error message on diff mismatch [GH-1501]
+  * provisioner/file: expand `~` in source path [GH-1569]
+  * provider/aws: Better retry logic, now retries up to 11 times by default
+      with exponentional backoff. This number is configurable. [GH-1787]
+  * provider/aws: Improved credential detection [GH-1470]
+  * provider/aws: Can specify a `token` via the config file [GH-1601]
+  * provider/aws: Added new `vpc_security_group_ids` attribute for AWS
+      Instances. If using a VPC, you can now modify the security groups for that
+      Instance without destroying it [GH-1539]
+  * provider/aws: White or blacklist account IDs that can be used to
+      protect against accidents. [GH-1595]
+  * provider/aws: Add a subset of IAM resources [GH-939]
+  * provider/aws: `aws_autoscaling_group` retries deletes through "in progress"
+      errors [GH-1840]
+  * provider/aws: `aws_autoscaling_group` waits for healthy capacity during
+      ASG creation [GH-1839]
+  * provider/aws: `aws_instance` supports placement groups [GH-1358]
+  * provider/aws: `aws_eip` supports network interface attachment [GH-1681]
+  * provider/aws: `aws_elb` supports in-place changing of listeners [GH-1619]
+  * provider/aws: `aws_elb` supports connection draining settings [GH-1502]
+  * provider/aws: `aws_elb` increase default idle timeout to 60s [GH-1646]
+  * provider/aws: `aws_key_pair` name can be omitted and generated [GH-1751]
+  * provider/aws: `aws_network_acl` improved validation for network ACL ports
+      and protocols [GH-1798] [GH-1808]
+  * provider/aws: `aws_route_table` can target network interfaces [GH-968]
+  * provider/aws: `aws_route_table` can specify propogating VGWs [GH-1516]
+  * provider/aws: `aws_route53_record` supports weighted sets [GH-1578]
+  * provider/aws: `aws_route53_zone` exports nameservers [GH-1525]
+  * provider/aws: `aws_s3_bucket` website support [GH-1738]
+  * provider/aws: `aws_security_group` name becomes optional and can be
+      automatically set to a unique identifier; this helps with
+      `create_before_destroy` scenarios [GH-1632]
+  * provider/aws: `aws_security_group` description becomes optional with a
+      static default value [GH-1632]
+  * provider/aws: automatically set the private IP as the SSH address
+      if not specified and no public IP is available [GH-1623]
+  * provider/aws: `aws_elb` exports `source_security_group` field [GH-1708]
+  * provider/aws: `aws_route53_record` supports alias targeting [GH-1775]
+  * provider/aws: Remove default AWS egress rule for newly created Security Groups [GH-1765]
+  * provider/consul: add `scheme` configuration argument [GH-1838]
+  * provider/docker: `docker_container` can specify links [GH-1564]
+  * provider/google: `resource_compute_disk` supports snapshots [GH-1426]
+  * provider/google: `resource_compute_instance` supports specifying the
+      device name [GH-1426]
+  * provider/openstack: Floating IP support for LBaaS [GH-1550]
+  * provider/openstack: Add AZ to `openstack_blockstorage_volume_v1` [GH-1726]
+
+BUG FIXES:
+
+  * core: Fix graph cycle issues surrounding modules [GH-1582] [GH-1637]
+  * core: math on arbitrary variables works if first operand isn't a
+      numeric primitive. [GH-1381]
+  * core: avoid unnecessary cycles by pruning tainted destroys from
+      graph if there are no tainted resources [GH-1475]
+  * core: fix issue where destroy nodes weren't pruned in specific
+      edge cases around matching prefixes, which could cause cycles [GH-1527]
+  * core: fix issue causing diff mismatch errors in certain scenarios during
+      resource replacement [GH-1515]
+  * core: dependencies on resources with a different index work when
+      count > 1 [GH-1540]
+  * core: don't panic if variable default type is invalid [GH-1344]
+  * core: fix perpetual diff issue for computed maps that are empty [GH-1607]
+  * core: validation added to check for `self` variables in modules [GH-1609]
+  * core: fix edge case where validation didn't pick up unknown fields
+      if the value was computed [GH-1507]
+  * core: Fix issue where values in sets on resources couldn't contain
+      hyphens. [GH-1641]
+  * core: Outputs removed from the config are removed from the state [GH-1714]
+  * core: Validate against the worst-case graph during plan phase to catch cycles
+      that would previously only show up during apply [GH-1655]
+  * core: Referencing invalid module output in module validates [GH-1448]
+  * command: remote states with uppercase types work [GH-1356]
+  * provider/aws: Support `AWS_SECURITY_TOKEN` env var again [GH-1785]
+  * provider/aws: Don't save "instance" for EIP if association fails [GH-1776]
+  * provider/aws: launch configuration ID set after create success [GH-1518]
+  * provider/aws: Fixed an issue with creating ELBs without any tags [GH-1580]
+  * provider/aws: Fix issue in Security Groups with empty IPRanges [GH-1612]
+  * provider/aws: manually deleted S3 buckets are refreshed properly [GH-1574]
+  * provider/aws: only check for EIP allocation ID in VPC [GH-1555]
+  * provider/aws: raw protocol numbers work in `aws_network_acl` [GH-1435]
+  * provider/aws: Block devices can be encrypted [GH-1718]
+  * provider/aws: ASG health check grace period can be updated in-place [GH-1682]
+  * provider/aws: ELB security groups can be updated in-place [GH-1662]
+  * provider/aws: `aws_main_route_table_association` can be deleted
+      manually [GH-1806]
+  * provider/docker: image can reference more complex image addresses,
+      such as with private repos with ports [GH-1818]
+  * provider/openstack: region config is not required [GH-1441]
+  * provider/openstack: `enable_dhcp` for networking subnet should be bool [GH-1741]
+  * provisioner/remote-exec: add random number to uploaded script path so
+      that parallel provisions work [GH-1588]
+  * provisioner/remote-exec: chmod the script to 0755 properly [GH-1796]
+
+## 0.4.2 (April 10, 2015)
+
+BUG FIXES:
+
+  * core: refresh won't remove outputs from state file [GH-1369]
+  * core: clarify "unknown variable" error [GH-1480]
+  * core: properly merge parent provider configs when asking for input
+  * provider/aws: fix panic possibility if RDS DB name is empty [GH-1460]
+  * provider/aws: fix issue detecting credentials for some resources [GH-1470]
+  * provider/google: fix issue causing unresolvable diffs when using legacy
+      `network` field on `google_compute_instance` [GH-1458]
+
+## 0.4.1 (April 9, 2015)
+
+IMPROVEMENTS:
+
+  * provider/aws: Route 53 records can now update `ttl` and `records` attributes
+      without destroying/creating the record [GH-1396]
+  * provider/aws: Support changing additional attributes of RDS databases
+      without forcing a new resource  [GH-1382]
+
+BUG FIXES:
+
+  * core: module paths in ".terraform" are consistent across different
+      systems so copying your ".terraform" folder works. [GH-1418]
+  * core: don't validate providers too early when nested in a module [GH-1380]
+  * core: fix race condition in `count.index` interpolation [GH-1454]
+  * core: properly initialize provisioners, fixing resource targeting
+      during destroy [GH-1544]
+  * command/push: don't ask for input if terraform.tfvars is present
+  * command/remote-config: remove spurrious error "nil" when initializing
+      remote state on a new configuration. [GH-1392]
+  * provider/aws: Fix issue with Route 53 and pre-existing Hosted Zones [GH-1415]
+  * provider/aws: Fix refresh issue in Route 53 hosted zone [GH-1384]
+  * provider/aws: Fix issue when changing map-public-ip in Subnets #1234
+  * provider/aws: Fix issue finding db subnets [GH-1377]
+  * provider/aws: Fix issues with `*_block_device` attributes on instances and
+      launch configs creating unresolvable diffs when certain optional
+      parameters were omitted from the config [GH-1445]
+  * provider/aws: Fix issue with `aws_launch_configuration` causing an
+      unnecessary diff for pre-0.4 environments [GH-1371]
+  * provider/aws: Fix several related issues with `aws_launch_configuration`
+      causing unresolvable diffs [GH-1444]
+  * provider/aws: Fix issue preventing launch configurations from being valid
+      in EC2 Classic [GH-1412]
+  * provider/aws: Fix issue in updating Route 53 records on refresh/read. [GH-1430]
+  * provider/docker: Don't ask for `cert_path` input on every run [GH-1432]
+  * provider/google: Fix issue causing unresolvable diff on instances with
+      `network_interface` [GH-1427]
+
+## 0.4.0 (April 2, 2015)
+
+BACKWARDS INCOMPATIBILITIES:
+
+  * Commands `terraform push` and `terraform pull` are now nested under
+    the `remote` command: `terraform remote push` and `terraform remote pull`.
+    The old `remote` functionality is now at `terraform remote config`. This
+    consolidates all remote state management under one command.
+  * Period-prefixed configuration files are now ignored. This might break
+    existing Terraform configurations if you had period-prefixed files.
+  * The `block_device` attribute of `aws_instance` has been removed in favor
+    of three more specific attributes to specify block device mappings:
+    `root_block_device`, `ebs_block_device`, and `ephemeral_block_device`.
+    Configurations using the old attribute will generate a validation error
+    indicating that they must be updated to use the new fields [GH-1045].
+
+FEATURES:
+
+  * **New provider: `dme` (DNSMadeEasy)** [GH-855]
+  * **New provider: `docker` (Docker)** - Manage container lifecycle
+      using the standard Docker API. [GH-855]
+  * **New provider: `openstack` (OpenStack)** - Interact with the many resources
+      provided by OpenStack. [GH-924]
+  * **New feature: `terraform_remote_state` resource** - Reference remote
+      states from other Terraform runs to use Terraform outputs as inputs
+      into another Terraform run.
+  * **New command: `taint`** - Manually mark a resource as tainted, causing
+      a destroy and recreate on the next plan/apply.
+  * **New resource: `aws_vpn_gateway`** [GH-1137]
+  * **New resource: `aws_elastic_network_interfaces`** [GH-1149]
+  * **Self-variables** can be used to reference the current resource's
+      attributes within a provisioner. Ex. `${self.private_ip_address}` [GH-1033]
+  * **Continuous state** saving during `terraform apply`. The state file is
+      continuously updated as apply is running, meaning that the state is
+      less likely to become corrupt in a catastrophic case: terraform panic
+      or system killing Terraform.
+  * **Math operations** in interpolations. You can now do things like
+      `${count.index+1}`. [GH-1068]
+  * **New AWS SDK:** Move to `aws-sdk-go` (hashicorp/aws-sdk-go),
+      a fork of the offical `awslabs` repo. We forked for stability while
+      `awslabs` refactored the library, and will move back to the officially
+      supported version in the next release.
+
+IMPROVEMENTS:
+
+  * **New config function: `format`** - Format a string using `sprintf`
+      format. [GH-1096]
+  * **New config function: `replace`** - Search and replace string values.
+      Search can be a regular expression. See documentation for more
+      info. [GH-1029]
+  * **New config function: `split`** - Split a value based on a delimiter.
+      This is useful for faking lists as parameters to modules.
+  * **New resource: `digitalocean_ssh_key`** [GH-1074]
+  * config: Expand `~` with homedir in `file()` paths [GH-1338]
+  * core: The serial of the state is only updated if there is an actual
+      change. This will lower the amount of state changing on things
+      like refresh.
+  * core: Autoload `terraform.tfvars.json` as well as `terraform.tfvars` [GH-1030]
+  * core: `.tf` files that start with a period are now ignored. [GH-1227]
+  * command/remote-config: After enabling remote state, a `pull` is
+      automatically done initially.
+  * providers/google: Add `size` option to disk blocks for instances. [GH-1284]
+  * providers/aws: Improve support for tagging resources.
+  * providers/aws: Add a short syntax for Route 53 Record names, e.g.
+      `www` instead of `www.example.com`.
+  * providers/aws: Improve dependency violation error handling, when deleting
+      Internet Gateways or Auto Scaling groups [GH-1325].
+  * provider/aws: Add non-destructive updates to AWS RDS. You can now upgrade
+      `egine_version`, `parameter_group_name`, and `multi_az` without forcing
+      a new database to be created.[GH-1341]
+  * providers/aws: Full support for block device mappings on instances and
+      launch configurations [GH-1045, GH-1364]
+  * provisioners/remote-exec: SSH agent support. [GH-1208]
+
+BUG FIXES:
+
+  * core: module outputs can be used as inputs to other modules [GH-822]
+  * core: Self-referencing splat variables are no longer allowed in
+      provisioners. [GH-795][GH-868]
+  * core: Validate that `depends_on` doesn't contain interpolations. [GH-1015]
+  * core: Module inputs can be non-strings. [GH-819]
+  * core: Fix invalid plan that resulted in "diffs don't match" error when
+      a computed attribute was used as part of a set parameter. [GH-1073]
+  * core: Fix edge case where state containing both "resource" and
+      "resource.0" would ignore the latter completely. [GH-1086]
+  * core: Modules with a source of a relative file path moving up
+      directories work properly, i.e. "../a" [GH-1232]
+  * providers/aws: manually deleted VPC removes it from the state
+  * providers/aws: `source_dest_check` regression fixed (now works). [GH-1020]
+  * providers/aws: Longer wait times for DB instances.
+  * providers/aws: Longer wait times for route53 records (30 mins). [GH-1164]
+  * providers/aws: Fix support for TXT records in Route 53. [GH-1213]
+  * providers/aws: Fix support for wildcard records in Route 53. [GH-1222]
+  * providers/aws: Fix issue with ignoring the 'self' attribute of a
+      Security Group rule. [GH-1223]
+  * providers/aws: Fix issue with `sql_mode` in RDS parameter group always
+      causing an update. [GH-1225]
+  * providers/aws: Fix dependency violation with subnets and security groups
+      [GH-1252]
+  * providers/aws: Fix issue with refreshing `db_subnet_groups` causing an error
+      instead of updating state [GH-1254]
+  * providers/aws: Prevent empty string to be used as default
+      `health_check_type` [GH-1052]
+  * providers/aws: Add tags on AWS IG creation, not just on update [GH-1176]
+  * providers/digitalocean: Waits until droplet is ready to be destroyed [GH-1057]
+  * providers/digitalocean: More lenient about 404's while waiting [GH-1062]
+  * providers/digitalocean: FQDN for domain records in CNAME, MX, NS, etc.
+      Also fixes invalid updates in plans. [GH-863]
+  * providers/google: Network data in state was not being stored. [GH-1095]
+  * providers/heroku: Fix panic when config vars block was empty. [GH-1211]
+
+PLUGIN CHANGES:
+
+  * New `helper/schema` fields for resources: `Deprecated` and `Removed` allow
+      plugins to generate warning or error messages when a given attribute is used.
+
+## 0.3.7 (February 19, 2015)
 
 IMPROVEMENTS:
 
@@ -7,6 +393,7 @@ IMPROVEMENTS:
       load balancing. [GH-588]
   * **New resource: `aws_main_route_table_association`** - Manage the main routing table
       of a VPC. [GH-918]
+  * **New resource: `aws_vpc_peering_connection`** [GH-963]
   * core: Formalized the syntax of interpolations and documented it
       very heavily.
   * core: Strings in interpolations can now contain further interpolations,
@@ -17,12 +404,14 @@ IMPROVEMENTS:
   * provider/aws: The `aws_db_instance` resource no longer requires both
       `final_snapshot_identifier` and `skip_final_snapshot`; the presence or
       absence of the former now implies the latter. [GH-874]
-  * provider/aws: Avoid unecessary update of `aws_subnet` when
+  * provider/aws: Avoid unnecessary update of `aws_subnet` when
       `map_public_ip_on_launch` is not specified in config. [GH-898]
   * provider/aws: Add `apply_method` to `aws_db_parameter_group` [GH-897]
   * provider/aws: Add `storage_type` to `aws_db_instance` [GH-896]
   * provider/aws: ELB can update listeners without requiring new. [GH-721]
   * provider/aws: Security group support egress rules. [GH-856]
+  * provider/aws: Route table supports VPC peering connection on route. [GH-963]
+  * provider/aws: Add `root_block_device` to `aws_db_instance` [GH-998]
   * provider/google: Remove "client secrets file", as it's no longer necessary
       for API authentication [GH-884].
   * provider/google: Expose `self_link` on `google_compute_instance` [GH-906]
@@ -42,13 +431,13 @@ BUG FIXES:
   * core: If a set type becomes empty, the state will be properly updated
       to remove it. [GH-952]
   * core: Bare "splat" variables are not allowed in provisioners. [GH-636]
+  * core: Invalid configuration keys to sub-resources are now errors. [GH-740]
   * command/apply: Won't try to initialize modules in some cases when
       no arguments are given. [GH-780]
   * command/apply: Fix regression where user variables weren't asked [GH-736]
   * helper/hashcode: Update `hash.String()` to always return a positive index.
       Fixes issue where specific strings would convert to a negative index
-      and be ommited when creating Route53 records. [GH-967]
-  * provider/aws: ELB subnet change doesn't force new resource. [GH-804]
+      and be omitted when creating Route53 records. [GH-967]
   * provider/aws: Automatically suffix the Route53 zone name on record names. [GH-312]
   * provider/aws: Instance should ignore root EBS devices. [GH-877]
   * provider/aws: Fix `aws_db_instance` to not recreate each time. [GH-874]
@@ -68,10 +457,9 @@ PLUGIN CHANGES:
   * New `helper/schema` field for resources: `Exists` must point to a function
       to check for the existence of a resource. This is used to properly
       handle the case where the resource was manually deleted. [GH-766]
-  * There is a semantic change in `GetOk` where it will return `true` as
-      long as any value is non-nil _anywhere_, not just in the config.
-      The biggest change here is that plugin authors should not assume
-      that ok means the value is _non-empty_ and should check that case as well.
+  * There is a semantic change in `GetOk` where it will return `true` if
+      there is any value in the diff that is _non-zero_. Before, it would
+      return true only if there was a value in the diff.
 
 ## 0.3.6 (January 6, 2015)
 
@@ -454,4 +842,3 @@ BUG FIXES:
 ## 0.1.0 (July 28, 2014)
 
   * Initial release
-

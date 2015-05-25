@@ -95,16 +95,16 @@ func resourceCloudStackInstanceCreate(d *schema.ResourceData, meta interface{}) 
 		return e.Error()
 	}
 
-	// Retrieve the template UUID
-	templateid, e := retrieveUUID(cs, "template", d.Get("template").(string))
-	if e != nil {
-		return e.Error()
-	}
-
 	// Retrieve the zone object
 	zone, _, err := cs.Zone.GetZoneByName(d.Get("zone").(string))
 	if err != nil {
 		return err
+	}
+
+	// Retrieve the template UUID
+	templateid, e := retrieveTemplateUUID(cs, zone.Id, d.Get("template").(string))
+	if e != nil {
+		return e.Error()
 	}
 
 	// Create a new parameter struct
@@ -156,6 +156,12 @@ func resourceCloudStackInstanceCreate(d *schema.ResourceData, meta interface{}) 
 
 	d.SetId(r.Id)
 
+	// Set the connection info for any configured provisioners
+	d.SetConnInfo(map[string]string{
+		"host":     r.Nic[0].Ipaddress,
+		"password": r.Password,
+	})
+
 	return resourceCloudStackInstanceRead(d, meta)
 }
 
@@ -178,11 +184,12 @@ func resourceCloudStackInstanceRead(d *schema.ResourceData, meta interface{}) er
 	// Update the config
 	d.Set("name", vm.Name)
 	d.Set("display_name", vm.Displayname)
-	d.Set("service_offering", vm.Serviceofferingname)
-	d.Set("network", vm.Nic[0].Networkname)
 	d.Set("ipaddress", vm.Nic[0].Ipaddress)
-	d.Set("template", vm.Templatename)
 	d.Set("zone", vm.Zonename)
+
+	setValueOrUUID(d, "network", vm.Nic[0].Networkname, vm.Nic[0].Networkid)
+	setValueOrUUID(d, "service_offering", vm.Serviceofferingname, vm.Serviceofferingid)
+	setValueOrUUID(d, "template", vm.Templatename, vm.Templateid)
 
 	return nil
 }

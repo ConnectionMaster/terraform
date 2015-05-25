@@ -7,13 +7,15 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/aws/awserr"
+	"github.com/awslabs/aws-sdk-go/service/elb"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/goamz/elb"
 )
 
 func TestAccAWSELB_basic(t *testing.T) {
-	var conf elb.LoadBalancer
+	var conf elb.LoadBalancerDescription
 	ssl_certificate_id := os.Getenv("AWS_SSL_CERTIFICATE_ID")
 
 	resource.Test(t, resource.TestCase{
@@ -52,8 +54,63 @@ func TestAccAWSELB_basic(t *testing.T) {
 	})
 }
 
+func TestAccAWSELB_tags(t *testing.T) {
+	var conf elb.LoadBalancerDescription
+	var td elb.TagDescription
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSELBDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccAWSELBConfig,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSELBExists("aws_elb.bar", &conf),
+					testAccCheckAWSELBAttributes(&conf),
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "name", "foobar-terraform-test"),
+					testAccLoadTags(&conf, &td),
+					testAccCheckELBTags(&td.Tags, "bar", "baz"),
+				),
+			},
+
+			resource.TestStep{
+				Config: testAccAWSELBConfig_TagUpdate,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSELBExists("aws_elb.bar", &conf),
+					testAccCheckAWSELBAttributes(&conf),
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "name", "foobar-terraform-test"),
+					testAccLoadTags(&conf, &td),
+					testAccCheckELBTags(&td.Tags, "foo", "bar"),
+					testAccCheckELBTags(&td.Tags, "new", "type"),
+				),
+			},
+		},
+	})
+}
+
+func testAccLoadTags(conf *elb.LoadBalancerDescription, td *elb.TagDescription) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		conn := testAccProvider.Meta().(*AWSClient).elbconn
+
+		describe, err := conn.DescribeTags(&elb.DescribeTagsInput{
+			LoadBalancerNames: []*string{conf.LoadBalancerName},
+		})
+
+		if err != nil {
+			return err
+		}
+		if len(describe.TagDescriptions) > 0 {
+			*td = *describe.TagDescriptions[0]
+		}
+		return nil
+	}
+}
+
 func TestAccAWSELB_InstanceAttaching(t *testing.T) {
-	var conf elb.LoadBalancer
+	var conf elb.LoadBalancerDescription
 
 	testCheckInstanceAttached := func(count int) resource.TestCheckFunc {
 		return func(*terraform.State) error {
@@ -88,17 +145,8 @@ func TestAccAWSELB_InstanceAttaching(t *testing.T) {
 	})
 }
 
-func TestAccAWSELB_AddSubnet(t *testing.T) {
-	var conf elb.LoadBalancer
-
-	testCheckSubnetsAdded := func(count int) resource.TestCheckFunc {
-		return func(*terraform.State) error {
-			if len(conf.Subnets) != count {
-				return fmt.Errorf("subnet count does not match")
-			}
-			return nil
-		}
-	}
+func TestAccAWSELBUpdate_Listener(t *testing.T) {
+	var conf elb.LoadBalancerDescription
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
@@ -106,18 +154,21 @@ func TestAccAWSELB_AddSubnet(t *testing.T) {
 		CheckDestroy: testAccCheckAWSELBDestroy,
 		Steps: []resource.TestStep{
 			resource.TestStep{
-				Config: testAccAWSELBConfigVPC,
+				Config: testAccAWSELBConfig,
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckAWSELBExists("aws_elb.bar", &conf),
 					testAccCheckAWSELBAttributes(&conf),
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "listener.206423021.instance_port", "8000"),
 				),
 			},
 
 			resource.TestStep{
-				Config: testAccAWSELBAddSubnets,
+				Config: testAccAWSELBConfigListener_update,
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckAWSELBExists("aws_elb.bar", &conf),
-					testCheckSubnetsAdded(2),
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "listener.3931999347.instance_port", "8080"),
 				),
 			},
 		},
@@ -125,7 +176,7 @@ func TestAccAWSELB_AddSubnet(t *testing.T) {
 }
 
 func TestAccAWSELB_HealthCheck(t *testing.T) {
-	var conf elb.LoadBalancer
+	var conf elb.LoadBalancerDescription
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
@@ -177,6 +228,140 @@ func TestAccAWSELBUpdate_HealthCheck(t *testing.T) {
 	})
 }
 
+func TestAccAWSELB_Timeout(t *testing.T) {
+	var conf elb.LoadBalancerDescription
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSELBDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccAWSELBConfigIdleTimeout,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSELBExists("aws_elb.bar", &conf),
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "idle_timeout", "200",
+					),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSELBUpdate_Timeout(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSELBDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccAWSELBConfigIdleTimeout,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "idle_timeout", "200",
+					),
+				),
+			},
+			resource.TestStep{
+				Config: testAccAWSELBConfigIdleTimeout_update,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "idle_timeout", "400",
+					),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSELB_ConnectionDraining(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSELBDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccAWSELBConfigConnectionDraining,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "connection_draining", "true",
+					),
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "connection_draining_timeout", "400",
+					),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSELBUpdate_ConnectionDraining(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSELBDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccAWSELBConfigConnectionDraining,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "connection_draining", "true",
+					),
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "connection_draining_timeout", "400",
+					),
+				),
+			},
+			resource.TestStep{
+				Config: testAccAWSELBConfigConnectionDraining_update_timeout,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "connection_draining", "true",
+					),
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "connection_draining_timeout", "600",
+					),
+				),
+			},
+			resource.TestStep{
+				Config: testAccAWSELBConfigConnectionDraining_update_disable,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "connection_draining", "false",
+					),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSELB_SecurityGroups(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSELBDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccAWSELBConfig,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "security_groups.#", "0",
+					),
+				),
+			},
+			resource.TestStep{
+				Config: testAccAWSELBConfigSecurityGroups,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"aws_elb.bar", "security_groups.#", "1",
+					),
+				),
+			},
+		},
+	})
+}
+
 func testAccCheckAWSELBDestroy(s *terraform.State) error {
 	conn := testAccProvider.Meta().(*AWSClient).elbconn
 
@@ -185,24 +370,24 @@ func testAccCheckAWSELBDestroy(s *terraform.State) error {
 			continue
 		}
 
-		describe, err := conn.DescribeLoadBalancers(&elb.DescribeLoadBalancer{
-			Names: []string{rs.Primary.ID},
+		describe, err := conn.DescribeLoadBalancers(&elb.DescribeLoadBalancersInput{
+			LoadBalancerNames: []*string{aws.String(rs.Primary.ID)},
 		})
 
 		if err == nil {
-			if len(describe.LoadBalancers) != 0 &&
-				describe.LoadBalancers[0].LoadBalancerName == rs.Primary.ID {
+			if len(describe.LoadBalancerDescriptions) != 0 &&
+				*describe.LoadBalancerDescriptions[0].LoadBalancerName == rs.Primary.ID {
 				return fmt.Errorf("ELB still exists")
 			}
 		}
 
 		// Verify the error
-		providerErr, ok := err.(*elb.Error)
+		providerErr, ok := err.(awserr.Error)
 		if !ok {
 			return err
 		}
 
-		if providerErr.Code != "InvalidLoadBalancerName.NotFound" {
+		if providerErr.Code() != "InvalidLoadBalancerName.NotFound" {
 			return fmt.Errorf("Unexpected error: %s", err)
 		}
 	}
@@ -210,33 +395,37 @@ func testAccCheckAWSELBDestroy(s *terraform.State) error {
 	return nil
 }
 
-func testAccCheckAWSELBAttributes(conf *elb.LoadBalancer) resource.TestCheckFunc {
+func testAccCheckAWSELBAttributes(conf *elb.LoadBalancerDescription) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		zones := []string{"us-west-2a", "us-west-2b", "us-west-2c"}
-		sort.StringSlice(conf.AvailabilityZones).Sort()
-		if !reflect.DeepEqual(conf.AvailabilityZones, zones) {
+		azs := make([]string, 0, len(conf.AvailabilityZones))
+		for _, x := range conf.AvailabilityZones {
+			azs = append(azs, *x)
+		}
+		sort.StringSlice(azs).Sort()
+		if !reflect.DeepEqual(azs, zones) {
 			return fmt.Errorf("bad availability_zones")
 		}
 
-		if conf.LoadBalancerName != "foobar-terraform-test" {
+		if *conf.LoadBalancerName != "foobar-terraform-test" {
 			return fmt.Errorf("bad name")
 		}
 
 		l := elb.Listener{
-			InstancePort:     8000,
-			InstanceProtocol: "HTTP",
-			LoadBalancerPort: 80,
-			Protocol:         "HTTP",
+			InstancePort:     aws.Long(int64(8000)),
+			InstanceProtocol: aws.String("HTTP"),
+			LoadBalancerPort: aws.Long(int64(80)),
+			Protocol:         aws.String("HTTP"),
 		}
 
-		if !reflect.DeepEqual(conf.Listeners[0], l) {
+		if !reflect.DeepEqual(conf.ListenerDescriptions[0].Listener, &l) {
 			return fmt.Errorf(
 				"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
-				conf.Listeners[0],
+				conf.ListenerDescriptions[0].Listener,
 				l)
 		}
 
-		if conf.DNSName == "" {
+		if *conf.DNSName == "" {
 			return fmt.Errorf("empty dns_name")
 		}
 
@@ -244,24 +433,28 @@ func testAccCheckAWSELBAttributes(conf *elb.LoadBalancer) resource.TestCheckFunc
 	}
 }
 
-func testAccCheckAWSELBAttributesHealthCheck(conf *elb.LoadBalancer) resource.TestCheckFunc {
+func testAccCheckAWSELBAttributesHealthCheck(conf *elb.LoadBalancerDescription) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		zones := []string{"us-west-2a", "us-west-2b", "us-west-2c"}
-		sort.StringSlice(conf.AvailabilityZones).Sort()
-		if !reflect.DeepEqual(conf.AvailabilityZones, zones) {
+		azs := make([]string, 0, len(conf.AvailabilityZones))
+		for _, x := range conf.AvailabilityZones {
+			azs = append(azs, *x)
+		}
+		sort.StringSlice(azs).Sort()
+		if !reflect.DeepEqual(azs, zones) {
 			return fmt.Errorf("bad availability_zones")
 		}
 
-		if conf.LoadBalancerName != "foobar-terraform-test" {
+		if *conf.LoadBalancerName != "foobar-terraform-test" {
 			return fmt.Errorf("bad name")
 		}
 
-		check := elb.HealthCheck{
-			Timeout:            30,
-			UnhealthyThreshold: 5,
-			HealthyThreshold:   5,
-			Interval:           60,
-			Target:             "HTTP:8000/",
+		check := &elb.HealthCheck{
+			Timeout:            aws.Long(int64(30)),
+			UnhealthyThreshold: aws.Long(int64(5)),
+			HealthyThreshold:   aws.Long(int64(5)),
+			Interval:           aws.Long(int64(60)),
+			Target:             aws.String("HTTP:8000/"),
 		}
 
 		if !reflect.DeepEqual(conf.HealthCheck, check) {
@@ -271,7 +464,7 @@ func testAccCheckAWSELBAttributesHealthCheck(conf *elb.LoadBalancer) resource.Te
 				check)
 		}
 
-		if conf.DNSName == "" {
+		if *conf.DNSName == "" {
 			return fmt.Errorf("empty dns_name")
 		}
 
@@ -279,7 +472,7 @@ func testAccCheckAWSELBAttributesHealthCheck(conf *elb.LoadBalancer) resource.Te
 	}
 }
 
-func testAccCheckAWSELBExists(n string, res *elb.LoadBalancer) resource.TestCheckFunc {
+func testAccCheckAWSELBExists(n string, res *elb.LoadBalancerDescription) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		rs, ok := s.RootModule().Resources[n]
 		if !ok {
@@ -292,20 +485,20 @@ func testAccCheckAWSELBExists(n string, res *elb.LoadBalancer) resource.TestChec
 
 		conn := testAccProvider.Meta().(*AWSClient).elbconn
 
-		describe, err := conn.DescribeLoadBalancers(&elb.DescribeLoadBalancer{
-			Names: []string{rs.Primary.ID},
+		describe, err := conn.DescribeLoadBalancers(&elb.DescribeLoadBalancersInput{
+			LoadBalancerNames: []*string{aws.String(rs.Primary.ID)},
 		})
 
 		if err != nil {
 			return err
 		}
 
-		if len(describe.LoadBalancers) != 1 ||
-			describe.LoadBalancers[0].LoadBalancerName != rs.Primary.ID {
+		if len(describe.LoadBalancerDescriptions) != 1 ||
+			*describe.LoadBalancerDescriptions[0].LoadBalancerName != rs.Primary.ID {
 			return fmt.Errorf("ELB not found")
 		}
 
-		*res = describe.LoadBalancers[0]
+		*res = *describe.LoadBalancerDescriptions[0]
 
 		return nil
 	}
@@ -322,6 +515,31 @@ resource "aws_elb" "bar" {
     lb_port = 80
     lb_protocol = "http"
   }
+
+	tags {
+		bar = "baz"
+	}
+
+  cross_zone_load_balancing = true
+}
+`
+
+const testAccAWSELBConfig_TagUpdate = `
+resource "aws_elb" "bar" {
+  name = "foobar-terraform-test"
+  availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
+
+  listener {
+    instance_port = 8000
+    instance_protocol = "http"
+    lb_port = 80
+    lb_protocol = "http"
+  }
+
+	tags {
+		foo = "bar"
+		new = "type"
+	}
 
   cross_zone_load_balancing = true
 }
@@ -348,64 +566,6 @@ resource "aws_instance" "foo" {
 	instance_type = "t1.micro"
 }
 `
-const testAccAWSELBConfigVPC = `
-resource "aws_elb" "bar" {
-  vpc_id = "${aws_vpc.foobar.id}"
-  name = "foobar-terraform-test"
-  availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
-
-  listener {
-    instance_port = 8000
-    instance_protocol = "http"
-    lb_port = 80
-    lb_protocol = "http"
-  }
-
-  subnets = ["${aws_subnet.baz.id}"]
-
-}
-
-resource "aws_subnet" "baz" {
-  vpc_id = "${aws_vpc.foobar.id}"
-  cidr_block = "10.0.69.0/24"
-}
-
-resource "aws_vpc" "foobar" {
-  cidr_block = "10.0.0.0/16"
-}
-`
-
-const testAccAWSELBAddSubnets = `
-resource "aws_elb" "bar" {
-  vpc_id = "${aws_vpc.foobar.id}"
-  name = "foobar-terraform-test"
-  availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
-
-  listener {
-    instance_port = 8000
-    instance_protocol = "http"
-    lb_port = 80
-    lb_protocol = "http"
-  }
-
-  subnets = ["${aws_subnet.baz.id}",
-             "${aws_subnet.foo.id}"]
-}
-
-resource "aws_subnet" "foo" {
-  vpc_id = "${aws_vpc.foobar.id}"
-  cidr_block = "10.0.68.0/24"
-}
-
-resource "aws_subnet" "baz" {
-  vpc_id = "${aws_vpc.foobar.id}"
-  cidr_block = "10.0.69.0/24"
-}
-
-resource "aws_vpc" "foobar" {
-  cidr_block = "10.0.0.0/16"
-}
-`
 
 const testAccAWSELBConfigListenerSSLCertificateId = `
 resource "aws_elb" "bar" {
@@ -425,7 +585,7 @@ resource "aws_elb" "bar" {
 const testAccAWSELBConfigHealthCheck = `
 resource "aws_elb" "bar" {
   name = "foobar-terraform-test"
-  availability_zones = ["us-west-2a"]
+  availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
 
   listener {
     instance_port = 8000
@@ -462,6 +622,130 @@ resource "aws_elb" "bar" {
     target = "HTTP:8000/"
     interval = 60
     timeout = 30
+  }
+}
+`
+
+const testAccAWSELBConfigListener_update = `
+resource "aws_elb" "bar" {
+  name = "foobar-terraform-test"
+  availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
+
+  listener {
+    instance_port = 8080
+    instance_protocol = "http"
+    lb_port = 80
+    lb_protocol = "http"
+  }
+}
+`
+
+const testAccAWSELBConfigIdleTimeout = `
+resource "aws_elb" "bar" {
+	name = "foobar-terraform-test"
+	availability_zones = ["us-west-2a"]
+
+	listener {
+		instance_port = 8000
+		instance_protocol = "http"
+		lb_port = 80
+		lb_protocol = "http"
+	}
+
+	idle_timeout = 200
+}
+`
+
+const testAccAWSELBConfigIdleTimeout_update = `
+resource "aws_elb" "bar" {
+	name = "foobar-terraform-test"
+	availability_zones = ["us-west-2a"]
+
+	listener {
+		instance_port = 8000
+		instance_protocol = "http"
+		lb_port = 80
+		lb_protocol = "http"
+	}
+
+	idle_timeout = 400
+}
+`
+
+const testAccAWSELBConfigConnectionDraining = `
+resource "aws_elb" "bar" {
+	name = "foobar-terraform-test"
+	availability_zones = ["us-west-2a"]
+
+	listener {
+		instance_port = 8000
+		instance_protocol = "http"
+		lb_port = 80
+		lb_protocol = "http"
+	}
+
+	connection_draining = true
+	connection_draining_timeout = 400
+}
+`
+
+const testAccAWSELBConfigConnectionDraining_update_timeout = `
+resource "aws_elb" "bar" {
+	name = "foobar-terraform-test"
+	availability_zones = ["us-west-2a"]
+
+	listener {
+		instance_port = 8000
+		instance_protocol = "http"
+		lb_port = 80
+		lb_protocol = "http"
+	}
+
+	connection_draining = true
+	connection_draining_timeout = 600
+}
+`
+
+const testAccAWSELBConfigConnectionDraining_update_disable = `
+resource "aws_elb" "bar" {
+	name = "foobar-terraform-test"
+	availability_zones = ["us-west-2a"]
+
+	listener {
+		instance_port = 8000
+		instance_protocol = "http"
+		lb_port = 80
+		lb_protocol = "http"
+	}
+
+	connection_draining = false
+}
+`
+
+const testAccAWSELBConfigSecurityGroups = `
+resource "aws_elb" "bar" {
+  name = "foobar-terraform-test"
+  availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
+
+  listener {
+    instance_port = 8000
+    instance_protocol = "http"
+    lb_port = 80
+    lb_protocol = "http"
+  }
+
+  security_groups = ["${aws_security_group.bar.id}"]
+}
+
+resource "aws_security_group" "bar" {
+  name = "terraform-elb-acceptance-test"
+  description = "Used in the terraform acceptance tests for the elb resource"
+
+  ingress {
+    protocol = "tcp"
+    from_port = 80
+    to_port = 80
+    cidr_blocks = ["0.0.0.0/0"]
   }
 }
 `

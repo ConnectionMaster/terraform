@@ -5,9 +5,9 @@ import (
 	"log"
 	"time"
 
-	"code.google.com/p/google-api-go-client/compute/v1"
-	"code.google.com/p/google-api-go-client/googleapi"
 	"github.com/hashicorp/terraform/helper/schema"
+	"google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
 )
 
 func resourceComputeAddress() *schema.Resource {
@@ -32,7 +32,6 @@ func resourceComputeAddress() *schema.Resource {
 				Type:     schema.TypeString,
 				Computed: true,
 			},
-
 		},
 	}
 }

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"testing"
 
-	"code.google.com/p/google-api-go-client/compute/v1"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
+	"google.golang.org/api/compute/v1"
 )
 
 func TestAccComputeInstanceTemplate_basic(t *testing.T) {
@@ -65,7 +65,7 @@ func TestAccComputeInstanceTemplate_disks(t *testing.T) {
 					testAccCheckComputeInstanceTemplateExists(
 						"google_compute_instance_template.foobar", &instanceTemplate),
 					testAccCheckComputeInstanceTemplateDisk(&instanceTemplate, "debian-7-wheezy-v20140814", true, true),
-					testAccCheckComputeInstanceTemplateDisk(&instanceTemplate, "foo_existing_disk", false, false),
+					testAccCheckComputeInstanceTemplateDisk(&instanceTemplate, "terraform-test-foobar", false, false),
 				),
 			},
 		},
@@ -214,8 +214,8 @@ resource "google_compute_instance_template" "foobar" {
 		boot = true
 	}
 
-	network {
-		source = "default"
+	network_interface {
+		network = "default"
 	}
 
 	metadata {
@@ -241,9 +241,11 @@ resource "google_compute_instance_template" "foobar" {
 		source_image = "debian-7-wheezy-v20140814"
 	}
 
-	network {
-		source = "default"
-		address = "${google_compute_address.foo.address}"
+	network_interface {
+		network = "default"
+		access_config {
+			nat_ip = "${google_compute_address.foo.address}"
+		}
 	}
 
 	metadata {
@@ -252,6 +254,14 @@ resource "google_compute_instance_template" "foobar" {
 }`
 
 const testAccComputeInstanceTemplate_disks = `
+resource "google_compute_disk" "foobar" {
+	name = "terraform-test-foobar"
+	image = "debian-7-wheezy-v20140814"
+	size = 10
+	type = "pd-ssd"
+	zone = "us-central1-a"
+}
+
 resource "google_compute_instance_template" "foobar" {
 	name = "terraform-test"
 	machine_type = "n1-standard-1"
@@ -263,13 +273,13 @@ resource "google_compute_instance_template" "foobar" {
 	}
 
 	disk {
-		source = "foo_existing_disk"
+		source = "terraform-test-foobar"
 		auto_delete = false
 		boot = false
 	}
 
-	network {
-		source = "default"
+	network_interface {
+		network = "default"
 	}
 
 	metadata {

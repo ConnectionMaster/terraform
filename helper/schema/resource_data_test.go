@@ -987,6 +987,33 @@ func TestResourceDataGetOk(t *testing.T) {
 			Value: []interface{}{},
 			Ok:    false,
 		},
+
+		// Further illustrates and clarifiies the GetOk semantics from #933, and
+		// highlights the limitation that zero-value config is currently
+		// indistinguishable from unset config.
+		{
+			Schema: map[string]*Schema{
+				"from_port": &Schema{
+					Type:     TypeInt,
+					Optional: true,
+				},
+			},
+
+			State: nil,
+
+			Diff: &terraform.InstanceDiff{
+				Attributes: map[string]*terraform.ResourceAttrDiff{
+					"from_port": &terraform.ResourceAttrDiff{
+						Old: "",
+						New: "0",
+					},
+				},
+			},
+
+			Key:   "from_port",
+			Value: 0,
+			Ok:    false,
+		},
 	}
 
 	for i, tc := range cases {
@@ -1004,7 +1031,7 @@ func TestResourceDataGetOk(t *testing.T) {
 			t.Fatalf("Bad: %d\n\n%#v", i, v)
 		}
 		if ok != tc.Ok {
-			t.Fatalf("Bad: %d\n\n%#v", i, ok)
+			t.Fatalf("%d: expected ok: %t, got: %t", i, tc.Ok, ok)
 		}
 	}
 }
@@ -1178,6 +1205,8 @@ func TestResourceDataHasChange(t *testing.T) {
 }
 
 func TestResourceDataSet(t *testing.T) {
+	var testNilPtr *string
+
 	cases := []struct {
 		Schema   map[string]*Schema
 		State    *terraform.InstanceState
@@ -1587,6 +1616,72 @@ func TestResourceDataSet(t *testing.T) {
 
 			GetKey:   "ratios",
 			GetValue: []interface{}{1.0, 2.2, 5.5},
+		},
+
+		// #13: Basic pointer
+		{
+			Schema: map[string]*Schema{
+				"availability_zone": &Schema{
+					Type:     TypeString,
+					Optional: true,
+					Computed: true,
+					ForceNew: true,
+				},
+			},
+
+			State: nil,
+
+			Diff: nil,
+
+			Key:   "availability_zone",
+			Value: testPtrTo("foo"),
+
+			GetKey:   "availability_zone",
+			GetValue: "foo",
+		},
+
+		// #14: Basic nil value
+		{
+			Schema: map[string]*Schema{
+				"availability_zone": &Schema{
+					Type:     TypeString,
+					Optional: true,
+					Computed: true,
+					ForceNew: true,
+				},
+			},
+
+			State: nil,
+
+			Diff: nil,
+
+			Key:   "availability_zone",
+			Value: testPtrTo(nil),
+
+			GetKey:   "availability_zone",
+			GetValue: "",
+		},
+
+		// #15: Basic nil pointer
+		{
+			Schema: map[string]*Schema{
+				"availability_zone": &Schema{
+					Type:     TypeString,
+					Optional: true,
+					Computed: true,
+					ForceNew: true,
+				},
+			},
+
+			State: nil,
+
+			Diff: nil,
+
+			Key:   "availability_zone",
+			Value: testNilPtr,
+
+			GetKey:   "availability_zone",
+			GetValue: "",
 		},
 	}
 
@@ -2418,7 +2513,7 @@ func TestResourceDataState(t *testing.T) {
 			},
 		},
 
-		// #20
+		// #20 empty computed map
 		{
 			Schema: map[string]*Schema{
 				"tags": &Schema{
@@ -2444,7 +2539,9 @@ func TestResourceDataState(t *testing.T) {
 			},
 
 			Result: &terraform.InstanceState{
-				Attributes: map[string]string{},
+				Attributes: map[string]string{
+					"tags.#": "0",
+				},
 			},
 		},
 
@@ -2593,6 +2690,108 @@ func TestResourceDataState(t *testing.T) {
 				},
 			},
 		},
+
+		// #25
+		{
+			Schema: map[string]*Schema{
+				"ports": &Schema{
+					Type:     TypeSet,
+					Optional: true,
+					Computed: true,
+					Elem:     &Schema{Type: TypeInt},
+					Set: func(a interface{}) int {
+						return a.(int)
+					},
+				},
+			},
+
+			State: nil,
+
+			Diff: nil,
+
+			Set: map[string]interface{}{
+				"ports": []interface{}{},
+			},
+
+			Result: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"ports.#": "0",
+				},
+			},
+		},
+
+		// #26
+		{
+			Schema: map[string]*Schema{
+				"ports": &Schema{
+					Type:     TypeList,
+					Optional: true,
+					Computed: true,
+					Elem:     &Schema{Type: TypeInt},
+				},
+			},
+
+			State: nil,
+
+			Diff: nil,
+
+			Set: map[string]interface{}{
+				"ports": []interface{}{},
+			},
+
+			Result: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"ports.#": "0",
+				},
+			},
+		},
+
+		// #27 Set lists
+		{
+			Schema: map[string]*Schema{
+				"ports": &Schema{
+					Type:     TypeList,
+					Optional: true,
+					Computed: true,
+					Elem: &Resource{
+						Schema: map[string]*Schema{
+							"index": &Schema{Type: TypeInt},
+							"uuids": &Schema{Type: TypeMap},
+						},
+					},
+				},
+			},
+
+			State: nil,
+
+			Diff: &terraform.InstanceDiff{
+				Attributes: map[string]*terraform.ResourceAttrDiff{
+					"ports.#": &terraform.ResourceAttrDiff{
+						NewComputed: true,
+					},
+				},
+			},
+
+			Set: map[string]interface{}{
+				"ports": []interface{}{
+					map[string]interface{}{
+						"index": 10,
+						"uuids": map[string]interface{}{
+							"80": "value",
+						},
+					},
+				},
+			},
+
+			Result: &terraform.InstanceState{
+				Attributes: map[string]string{
+					"ports.#":          "1",
+					"ports.0.index":    "10",
+					"ports.0.uuids.#":  "1",
+					"ports.0.uuids.80": "value",
+				},
+			},
+		},
 	}
 
 	for i, tc := range cases {
@@ -2685,4 +2884,8 @@ func TestResourceDataSetId_override(t *testing.T) {
 	if actual.ID != "foo" {
 		t.Fatalf("bad: %#v", actual)
 	}
+}
+
+func testPtrTo(raw interface{}) interface{} {
+	return &raw
 }

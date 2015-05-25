@@ -84,7 +84,7 @@ func resourceCloudStackDiskCreate(d *schema.ResourceData, meta interface{}) erro
 
 	if d.Get("size").(int) != 0 {
 		// Set the volume size
-		p.SetSize(d.Get("size").(int))
+		p.SetSize(int64(d.Get("size").(int)))
 	}
 
 	// Retrieve the zone UUID
@@ -139,10 +139,11 @@ func resourceCloudStackDiskRead(d *schema.ResourceData, meta interface{}) error 
 	}
 
 	d.Set("name", v.Name)
-	d.Set("attach", v.Attached != "") // If attached this will contain a timestamp when attached
-	d.Set("disk_offering", v.Diskofferingname)
-	d.Set("size", v.Size/(1024*1024*1024)) // Needed to get GB's again
-	d.Set("zone", v.Zonename)
+	d.Set("attach", v.Attached != "")           // If attached this will contain a timestamp when attached
+	d.Set("size", int(v.Size/(1024*1024*1024))) // Needed to get GB's again
+
+	setValueOrUUID(d, "disk_offering", v.Diskofferingname, v.Diskofferingid)
+	setValueOrUUID(d, "zone", v.Zonename, v.Zoneid)
 
 	if v.Attached != "" {
 		// Get the virtual machine details
@@ -196,7 +197,7 @@ func resourceCloudStackDiskUpdate(d *schema.ResourceData, meta interface{}) erro
 
 		if d.Get("size").(int) != 0 {
 			// Set the size
-			p.SetSize(d.Get("size").(int))
+			p.SetSize(int64(d.Get("size").(int)))
 		}
 
 		// Set the shrink bit
@@ -367,7 +368,7 @@ func isAttached(cs *cloudstack.CloudStackClient, id string) (bool, error) {
 	return v.Attached != "", nil
 }
 
-func retrieveDeviceID(device string) int {
+func retrieveDeviceID(device string) int64 {
 	switch device {
 	case "/dev/xvdb", "D:":
 		return 1
@@ -402,7 +403,7 @@ func retrieveDeviceID(device string) int {
 	}
 }
 
-func retrieveDeviceName(device int, os string) string {
+func retrieveDeviceName(device int64, os string) string {
 	switch device {
 	case 1:
 		if os == "Windows" {

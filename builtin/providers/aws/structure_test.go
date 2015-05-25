@@ -4,12 +4,13 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/service/ec2"
+	"github.com/awslabs/aws-sdk-go/service/elb"
+	"github.com/awslabs/aws-sdk-go/service/rds"
+	"github.com/awslabs/aws-sdk-go/service/route53"
 	"github.com/hashicorp/terraform/flatmap"
-	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/mitchellh/goamz/ec2"
-	"github.com/mitchellh/goamz/elb"
-	"github.com/mitchellh/goamz/rds"
 )
 
 // Returns test configuration
@@ -35,10 +36,8 @@ func testConf() map[string]string {
 	}
 }
 
-func Test_expandIPPerms(t *testing.T) {
-	hash := func(v interface{}) int {
-		return hashcode.String(v.(string))
-	}
+func TestexpandIPPerms(t *testing.T) {
+	hash := schema.HashString
 
 	expanded := []interface{}{
 		map[string]interface{}{
@@ -58,125 +57,236 @@ func Test_expandIPPerms(t *testing.T) {
 			"self":      true,
 		},
 	}
-	perms := expandIPPerms("foo", expanded)
+	group := &ec2.SecurityGroup{
+		GroupID: aws.String("foo"),
+		VPCID:   aws.String("bar"),
+	}
+	perms, err := expandIPPerms(group, expanded)
+	if err != nil {
+		t.Fatalf("error expanding perms: %v", err)
+	}
 
-	expected := []ec2.IPPerm{
-		ec2.IPPerm{
-			Protocol:  "icmp",
-			FromPort:  1,
-			ToPort:    -1,
-			SourceIPs: []string{"0.0.0.0/0"},
-			SourceGroups: []ec2.UserSecurityGroup{
-				ec2.UserSecurityGroup{
-					OwnerId: "foo",
-					Id:      "sg-22222",
+	expected := []ec2.IPPermission{
+		ec2.IPPermission{
+			IPProtocol: aws.String("icmp"),
+			FromPort:   aws.Long(int64(1)),
+			ToPort:     aws.Long(int64(-1)),
+			IPRanges:   []*ec2.IPRange{&ec2.IPRange{CIDRIP: aws.String("0.0.0.0/0")}},
+			UserIDGroupPairs: []*ec2.UserIDGroupPair{
+				&ec2.UserIDGroupPair{
+					UserID:  aws.String("foo"),
+					GroupID: aws.String("sg-22222"),
 				},
-				ec2.UserSecurityGroup{
-					Id: "sg-11111",
+				&ec2.UserIDGroupPair{
+					GroupID: aws.String("sg-22222"),
 				},
 			},
 		},
-		ec2.IPPerm{
-			Protocol: "icmp",
-			FromPort: 1,
-			ToPort:   -1,
-			SourceGroups: []ec2.UserSecurityGroup{
-				ec2.UserSecurityGroup{
-					Id: "foo",
+		ec2.IPPermission{
+			IPProtocol: aws.String("icmp"),
+			FromPort:   aws.Long(int64(1)),
+			ToPort:     aws.Long(int64(-1)),
+			UserIDGroupPairs: []*ec2.UserIDGroupPair{
+				&ec2.UserIDGroupPair{
+					UserID: aws.String("foo"),
 				},
 			},
 		},
 	}
 
-	if !reflect.DeepEqual(perms, expected) {
+	exp := expected[0]
+	perm := perms[0]
+
+	if *exp.FromPort != *perm.FromPort {
 		t.Fatalf(
 			"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
-			perms[0],
-			expected)
+			*perm.FromPort,
+			*exp.FromPort)
+	}
+
+	if *exp.IPRanges[0].CIDRIP != *perm.IPRanges[0].CIDRIP {
+		t.Fatalf(
+			"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
+			*perm.IPRanges[0].CIDRIP,
+			*exp.IPRanges[0].CIDRIP)
+	}
+
+	if *exp.UserIDGroupPairs[0].UserID != *perm.UserIDGroupPairs[0].UserID {
+		t.Fatalf(
+			"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
+			*perm.UserIDGroupPairs[0].UserID,
+			*exp.UserIDGroupPairs[0].UserID)
 	}
 
 }
 
-func Test_flattenIPPerms(t *testing.T) {
-	cases := []struct {
-		Input  []ec2.IPPerm
-		Output []map[string]interface{}
-	}{
-		{
-			Input: []ec2.IPPerm{
-				ec2.IPPerm{
-					Protocol:  "icmp",
-					FromPort:  1,
-					ToPort:    -1,
-					SourceIPs: []string{"0.0.0.0/0"},
-					SourceGroups: []ec2.UserSecurityGroup{
-						ec2.UserSecurityGroup{
-							Id: "sg-11111",
-						},
-					},
-				},
-			},
+func TestExpandIPPerms_NegOneProtocol(t *testing.T) {
+	hash := schema.HashString
 
-			Output: []map[string]interface{}{
-				map[string]interface{}{
-					"protocol":        "icmp",
-					"from_port":       1,
-					"to_port":         -1,
-					"cidr_blocks":     []string{"0.0.0.0/0"},
-					"security_groups": []string{"sg-11111"},
-				},
-			},
+	expanded := []interface{}{
+		map[string]interface{}{
+			"protocol":    "-1",
+			"from_port":   0,
+			"to_port":     0,
+			"cidr_blocks": []interface{}{"0.0.0.0/0"},
+			"security_groups": schema.NewSet(hash, []interface{}{
+				"sg-11111",
+				"foo/sg-22222",
+			}),
 		},
+	}
+	group := &ec2.SecurityGroup{
+		GroupID: aws.String("foo"),
+		VPCID:   aws.String("bar"),
+	}
 
-		{
-			Input: []ec2.IPPerm{
-				ec2.IPPerm{
-					Protocol:     "icmp",
-					FromPort:     1,
-					ToPort:       -1,
-					SourceIPs:    []string{"0.0.0.0/0"},
-					SourceGroups: nil,
-				},
-			},
+	perms, err := expandIPPerms(group, expanded)
+	if err != nil {
+		t.Fatalf("error expanding perms: %v", err)
+	}
 
-			Output: []map[string]interface{}{
-				map[string]interface{}{
-					"protocol":    "icmp",
-					"from_port":   1,
-					"to_port":     -1,
-					"cidr_blocks": []string{"0.0.0.0/0"},
+	expected := []ec2.IPPermission{
+		ec2.IPPermission{
+			IPProtocol: aws.String("-1"),
+			FromPort:   aws.Long(int64(0)),
+			ToPort:     aws.Long(int64(0)),
+			IPRanges:   []*ec2.IPRange{&ec2.IPRange{CIDRIP: aws.String("0.0.0.0/0")}},
+			UserIDGroupPairs: []*ec2.UserIDGroupPair{
+				&ec2.UserIDGroupPair{
+					UserID:  aws.String("foo"),
+					GroupID: aws.String("sg-22222"),
 				},
-			},
-		},
-		{
-			Input: []ec2.IPPerm{
-				ec2.IPPerm{
-					Protocol:  "icmp",
-					FromPort:  1,
-					ToPort:    -1,
-					SourceIPs: nil,
-				},
-			},
-
-			Output: []map[string]interface{}{
-				map[string]interface{}{
-					"protocol":  "icmp",
-					"from_port": 1,
-					"to_port":   -1,
+				&ec2.UserIDGroupPair{
+					GroupID: aws.String("sg-22222"),
 				},
 			},
 		},
 	}
 
-	for _, tc := range cases {
-		output := flattenIPPerms(tc.Input)
-		if !reflect.DeepEqual(output, tc.Output) {
-			t.Fatalf("Input:\n\n%#v\n\nOutput:\n\n%#v", tc.Input, output)
-		}
+	exp := expected[0]
+	perm := perms[0]
+
+	if *exp.FromPort != *perm.FromPort {
+		t.Fatalf(
+			"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
+			*perm.FromPort,
+			*exp.FromPort)
+	}
+
+	if *exp.IPRanges[0].CIDRIP != *perm.IPRanges[0].CIDRIP {
+		t.Fatalf(
+			"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
+			*perm.IPRanges[0].CIDRIP,
+			*exp.IPRanges[0].CIDRIP)
+	}
+
+	if *exp.UserIDGroupPairs[0].UserID != *perm.UserIDGroupPairs[0].UserID {
+		t.Fatalf(
+			"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
+			*perm.UserIDGroupPairs[0].UserID,
+			*exp.UserIDGroupPairs[0].UserID)
+	}
+
+	// Now test the error case. This *should* error when either from_port
+	// or to_port is not zero, but protocal is "-1".
+	errorCase := []interface{}{
+		map[string]interface{}{
+			"protocol":    "-1",
+			"from_port":   0,
+			"to_port":     65535,
+			"cidr_blocks": []interface{}{"0.0.0.0/0"},
+			"security_groups": schema.NewSet(hash, []interface{}{
+				"sg-11111",
+				"foo/sg-22222",
+			}),
+		},
+	}
+	securityGroups := &ec2.SecurityGroup{
+		GroupID: aws.String("foo"),
+		VPCID:   aws.String("bar"),
+	}
+
+	_, expandErr := expandIPPerms(securityGroups, errorCase)
+	if expandErr == nil {
+		t.Fatal("expandIPPerms should have errored!")
 	}
 }
 
-func Test_expandListeners(t *testing.T) {
+func TestExpandIPPerms_nonVPC(t *testing.T) {
+	hash := schema.HashString
+
+	expanded := []interface{}{
+		map[string]interface{}{
+			"protocol":    "icmp",
+			"from_port":   1,
+			"to_port":     -1,
+			"cidr_blocks": []interface{}{"0.0.0.0/0"},
+			"security_groups": schema.NewSet(hash, []interface{}{
+				"sg-11111",
+				"foo/sg-22222",
+			}),
+		},
+		map[string]interface{}{
+			"protocol":  "icmp",
+			"from_port": 1,
+			"to_port":   -1,
+			"self":      true,
+		},
+	}
+	group := &ec2.SecurityGroup{
+		GroupName: aws.String("foo"),
+	}
+	perms, err := expandIPPerms(group, expanded)
+	if err != nil {
+		t.Fatalf("error expanding perms: %v", err)
+	}
+
+	expected := []ec2.IPPermission{
+		ec2.IPPermission{
+			IPProtocol: aws.String("icmp"),
+			FromPort:   aws.Long(int64(1)),
+			ToPort:     aws.Long(int64(-1)),
+			IPRanges:   []*ec2.IPRange{&ec2.IPRange{CIDRIP: aws.String("0.0.0.0/0")}},
+			UserIDGroupPairs: []*ec2.UserIDGroupPair{
+				&ec2.UserIDGroupPair{
+					GroupName: aws.String("sg-22222"),
+				},
+				&ec2.UserIDGroupPair{
+					GroupName: aws.String("sg-22222"),
+				},
+			},
+		},
+		ec2.IPPermission{
+			IPProtocol: aws.String("icmp"),
+			FromPort:   aws.Long(int64(1)),
+			ToPort:     aws.Long(int64(-1)),
+			UserIDGroupPairs: []*ec2.UserIDGroupPair{
+				&ec2.UserIDGroupPair{
+					GroupName: aws.String("foo"),
+				},
+			},
+		},
+	}
+
+	exp := expected[0]
+	perm := perms[0]
+
+	if *exp.FromPort != *perm.FromPort {
+		t.Fatalf(
+			"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
+			*perm.FromPort,
+			*exp.FromPort)
+	}
+
+	if *exp.IPRanges[0].CIDRIP != *perm.IPRanges[0].CIDRIP {
+		t.Fatalf(
+			"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
+			*perm.IPRanges[0].CIDRIP,
+			*exp.IPRanges[0].CIDRIP)
+	}
+}
+
+func TestexpandListeners(t *testing.T) {
 	expanded := []interface{}{
 		map[string]interface{}{
 			"instance_port":     8000,
@@ -190,11 +300,11 @@ func Test_expandListeners(t *testing.T) {
 		t.Fatalf("bad: %#v", err)
 	}
 
-	expected := elb.Listener{
-		InstancePort:     8000,
-		LoadBalancerPort: 80,
-		InstanceProtocol: "http",
-		Protocol:         "http",
+	expected := &elb.Listener{
+		InstancePort:     aws.Long(int64(8000)),
+		LoadBalancerPort: aws.Long(int64(80)),
+		InstanceProtocol: aws.String("http"),
+		Protocol:         aws.String("http"),
 	}
 
 	if !reflect.DeepEqual(listeners[0], expected) {
@@ -206,26 +316,26 @@ func Test_expandListeners(t *testing.T) {
 
 }
 
-func Test_flattenHealthCheck(t *testing.T) {
+func TestflattenHealthCheck(t *testing.T) {
 	cases := []struct {
-		Input  elb.HealthCheck
+		Input  *elb.HealthCheck
 		Output []map[string]interface{}
 	}{
 		{
-			Input: elb.HealthCheck{
-				UnhealthyThreshold: 10,
-				HealthyThreshold:   10,
-				Target:             "HTTP:80/",
-				Timeout:            30,
-				Interval:           30,
+			Input: &elb.HealthCheck{
+				UnhealthyThreshold: aws.Long(int64(10)),
+				HealthyThreshold:   aws.Long(int64(10)),
+				Target:             aws.String("HTTP:80/"),
+				Timeout:            aws.Long(int64(30)),
+				Interval:           aws.Long(int64(30)),
 			},
 			Output: []map[string]interface{}{
 				map[string]interface{}{
-					"unhealthy_threshold": 10,
-					"healthy_threshold":   10,
+					"unhealthy_threshold": int64(10),
+					"healthy_threshold":   int64(10),
 					"target":              "HTTP:80/",
-					"timeout":             30,
-					"interval":            30,
+					"timeout":             int64(30),
+					"interval":            int64(30),
 				},
 			},
 		},
@@ -239,12 +349,12 @@ func Test_flattenHealthCheck(t *testing.T) {
 	}
 }
 
-func Test_expandStringList(t *testing.T) {
+func TestExpandStringList(t *testing.T) {
 	expanded := flatmap.Expand(testConf(), "availability_zones").([]interface{})
 	stringList := expandStringList(expanded)
-	expected := []string{
-		"us-east-1a",
-		"us-east-1b",
+	expected := []*string{
+		aws.String("us-east-1a"),
+		aws.String("us-east-1b"),
 	}
 
 	if !reflect.DeepEqual(stringList, expected) {
@@ -256,7 +366,7 @@ func Test_expandStringList(t *testing.T) {
 
 }
 
-func Test_expandParameters(t *testing.T) {
+func TestexpandParameters(t *testing.T) {
 	expanded := []interface{}{
 		map[string]interface{}{
 			"name":         "character_set_client",
@@ -269,10 +379,10 @@ func Test_expandParameters(t *testing.T) {
 		t.Fatalf("bad: %#v", err)
 	}
 
-	expected := rds.Parameter{
-		ParameterName:  "character_set_client",
-		ParameterValue: "utf8",
-		ApplyMethod:    "immediate",
+	expected := &rds.Parameter{
+		ParameterName:  aws.String("character_set_client"),
+		ParameterValue: aws.String("utf8"),
+		ApplyMethod:    aws.String("immediate"),
 	}
 
 	if !reflect.DeepEqual(parameters[0], expected) {
@@ -283,22 +393,22 @@ func Test_expandParameters(t *testing.T) {
 	}
 }
 
-func Test_flattenParameters(t *testing.T) {
+func TestflattenParameters(t *testing.T) {
 	cases := []struct {
-		Input  []rds.Parameter
+		Input  []*rds.Parameter
 		Output []map[string]interface{}
 	}{
 		{
-			Input: []rds.Parameter{
-				rds.Parameter{
-					ParameterName:  "character_set_client",
-					ParameterValue: "utf8",
+			Input: []*rds.Parameter{
+				&rds.Parameter{
+					ParameterName:  aws.String("character_set_client"),
+					ParameterValue: aws.String("utf8"),
 				},
 			},
 			Output: []map[string]interface{}{
 				map[string]interface{}{
-					"name":         "character_set_client",
-					"value":        "utf8",
+					"name":  "character_set_client",
+					"value": "utf8",
 				},
 			},
 		},
@@ -309,5 +419,141 @@ func Test_flattenParameters(t *testing.T) {
 		if !reflect.DeepEqual(output, tc.Output) {
 			t.Fatalf("Got:\n\n%#v\n\nExpected:\n\n%#v", output, tc.Output)
 		}
+	}
+}
+
+func TestexpandInstanceString(t *testing.T) {
+
+	expected := []*elb.Instance{
+		&elb.Instance{InstanceID: aws.String("test-one")},
+		&elb.Instance{InstanceID: aws.String("test-two")},
+	}
+
+	ids := []interface{}{
+		"test-one",
+		"test-two",
+	}
+
+	expanded := expandInstanceString(ids)
+
+	if !reflect.DeepEqual(expanded, expected) {
+		t.Fatalf("Expand Instance String output did not match.\nGot:\n%#v\n\nexpected:\n%#v", expanded, expected)
+	}
+}
+
+func TestflattenNetworkInterfacesPrivateIPAddesses(t *testing.T) {
+	expanded := []*ec2.NetworkInterfacePrivateIPAddress{
+		&ec2.NetworkInterfacePrivateIPAddress{PrivateIPAddress: aws.String("192.168.0.1")},
+		&ec2.NetworkInterfacePrivateIPAddress{PrivateIPAddress: aws.String("192.168.0.2")},
+	}
+
+	result := flattenNetworkInterfacesPrivateIPAddesses(expanded)
+
+	if result == nil {
+		t.Fatal("result was nil")
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("expected result had %d elements, but got %d", 2, len(result))
+	}
+
+	if result[0] != "192.168.0.1" {
+		t.Fatalf("expected ip to be 192.168.0.1, but was %s", result[0])
+	}
+
+	if result[1] != "192.168.0.2" {
+		t.Fatalf("expected ip to be 192.168.0.2, but was %s", result[1])
+	}
+}
+
+func TestflattenGroupIdentifiers(t *testing.T) {
+	expanded := []*ec2.GroupIdentifier{
+		&ec2.GroupIdentifier{GroupID: aws.String("sg-001")},
+		&ec2.GroupIdentifier{GroupID: aws.String("sg-002")},
+	}
+
+	result := flattenGroupIdentifiers(expanded)
+
+	if len(result) != 2 {
+		t.Fatalf("expected result had %d elements, but got %d", 2, len(result))
+	}
+
+	if result[0] != "sg-001" {
+		t.Fatalf("expected id to be sg-001, but was %s", result[0])
+	}
+
+	if result[1] != "sg-002" {
+		t.Fatalf("expected id to be sg-002, but was %s", result[1])
+	}
+}
+
+func TestexpandPrivateIPAddesses(t *testing.T) {
+
+	ip1 := "192.168.0.1"
+	ip2 := "192.168.0.2"
+	flattened := []interface{}{
+		ip1,
+		ip2,
+	}
+
+	result := expandPrivateIPAddesses(flattened)
+
+	if len(result) != 2 {
+		t.Fatalf("expected result had %d elements, but got %d", 2, len(result))
+	}
+
+	if *result[0].PrivateIPAddress != "192.168.0.1" || !*result[0].Primary {
+		t.Fatalf("expected ip to be 192.168.0.1 and Primary, but got %v, %t", *result[0].PrivateIPAddress, *result[0].Primary)
+	}
+
+	if *result[1].PrivateIPAddress != "192.168.0.2" || *result[1].Primary {
+		t.Fatalf("expected ip to be 192.168.0.2 and not Primary, but got %v, %t", *result[1].PrivateIPAddress, *result[1].Primary)
+	}
+}
+
+func TestflattenAttachment(t *testing.T) {
+	expanded := &ec2.NetworkInterfaceAttachment{
+		InstanceID:   aws.String("i-00001"),
+		DeviceIndex:  aws.Long(int64(1)),
+		AttachmentID: aws.String("at-002"),
+	}
+
+	result := flattenAttachment(expanded)
+
+	if result == nil {
+		t.Fatal("expected result to have value, but got nil")
+	}
+
+	if result["instance"] != "i-00001" {
+		t.Fatalf("expected instance to be i-00001, but got %s", result["instance"])
+	}
+
+	if result["device_index"] != int64(1) {
+		t.Fatalf("expected device_index to be 1, but got %d", result["device_index"])
+	}
+
+	if result["attachment_id"] != "at-002" {
+		t.Fatalf("expected attachment_id to be at-002, but got %s", result["attachment_id"])
+	}
+}
+
+func TestFlattenResourceRecords(t *testing.T) {
+	expanded := []*route53.ResourceRecord{
+		&route53.ResourceRecord{
+			Value: aws.String("127.0.0.1"),
+		},
+		&route53.ResourceRecord{
+			Value: aws.String("127.0.0.3"),
+		},
+	}
+
+	result := flattenResourceRecords(expanded)
+
+	if result == nil {
+		t.Fatal("expected result to have value, but got nil")
+	}
+
+	if len(result) != 2 {
+		t.Fatal("expected result to have value, but got nil")
 	}
 }

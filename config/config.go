@@ -28,6 +28,7 @@ type Config struct {
 	// any meaningful directory.
 	Dir string
 
+	Atlas           *AtlasConfig
 	Modules         []*Module
 	ProviderConfigs []*ProviderConfig
 	Resources       []*Resource
@@ -37,6 +38,13 @@ type Config struct {
 	// The fields below can be filled in by loaders for validation
 	// purposes.
 	unknownKeys []string
+}
+
+// AtlasConfig is the configuration for building in HashiCorp's Atlas.
+type AtlasConfig struct {
+	Name    string
+	Include []string
+	Exclude []string
 }
 
 // Module is a module used within a configuration.
@@ -55,6 +63,7 @@ type Module struct {
 // resource provider.
 type ProviderConfig struct {
 	Name      string
+	Alias     string
 	RawConfig *RawConfig
 }
 
@@ -67,6 +76,7 @@ type Resource struct {
 	RawCount     *RawConfig
 	RawConfig    *RawConfig
 	Provisioners []*Provisioner
+	Provider     string
 	DependsOn    []string
 	Lifecycle    ResourceLifecycle
 }
@@ -75,6 +85,7 @@ type Resource struct {
 // to allow customized behavior
 type ResourceLifecycle struct {
 	CreateBeforeDestroy bool `hcl:"create_before_destroy"`
+	PreventDestroy      bool `hcl:"prevent_destroy"`
 }
 
 // Provisioner is a configured provisioner step on a resource.
@@ -199,7 +210,7 @@ func (c *Config) Validate() error {
 
 			if _, ok := varMap[uv.Name]; !ok {
 				errs = append(errs, fmt.Errorf(
-					"%s: unknown variable referenced: %s",
+					"%s: unknown variable referenced: '%s'. define it with 'variable' blocks",
 					source,
 					uv.Name))
 			}
@@ -226,6 +237,20 @@ func (c *Config) Validate() error {
 				}
 			}
 		}
+	}
+
+	// Check that providers aren't declared multiple times.
+	providerSet := make(map[string]struct{})
+	for _, p := range c.ProviderConfigs {
+		name := p.FullName()
+		if _, ok := providerSet[name]; ok {
+			errs = append(errs, fmt.Errorf(
+				"provider.%s: declared multiple times, you can only declare a provider once",
+				name))
+			continue
+		}
+
+		providerSet[name] = struct{}{}
 	}
 
 	// Check that all references to modules are valid
@@ -280,6 +305,18 @@ func (c *Config) Validate() error {
 					m.Id(), k))
 			}
 			raw[k] = strVal
+		}
+
+		// Check for invalid count variables
+		for _, v := range m.RawConfig.Variables {
+			switch v.(type) {
+			case *CountVariable:
+				errs = append(errs, fmt.Errorf(
+					"%s: count variables are only valid within resources", m.Name))
+			case *SelfVariable:
+				errs = append(errs, fmt.Errorf(
+					"%s: self variables are only valid within resources", m.Name))
+			}
 		}
 
 		// Update the raw configuration to only contain the string values
@@ -379,10 +416,64 @@ func (c *Config) Validate() error {
 
 		// Verify depends on points to resources that all exist
 		for _, d := range r.DependsOn {
+			// Check if we contain interpolations
+			rc, err := NewRawConfig(map[string]interface{}{
+				"value": d,
+			})
+			if err == nil && len(rc.Variables) > 0 {
+				errs = append(errs, fmt.Errorf(
+					"%s: depends on value cannot contain interpolations: %s",
+					n, d))
+				continue
+			}
+
 			if _, ok := resources[d]; !ok {
 				errs = append(errs, fmt.Errorf(
 					"%s: resource depends on non-existent resource '%s'",
 					n, d))
+			}
+		}
+
+		// Verify provider points to a provider that is configured
+		if r.Provider != "" {
+			if _, ok := providerSet[r.Provider]; !ok {
+				errs = append(errs, fmt.Errorf(
+					"%s: resource depends on non-configured provider '%s'",
+					n, r.Provider))
+			}
+		}
+
+		// Verify provisioners don't contain any splats
+		for _, p := range r.Provisioners {
+			// This validation checks that there are now splat variables
+			// referencing ourself. This currently is not allowed.
+
+			for _, v := range p.ConnInfo.Variables {
+				rv, ok := v.(*ResourceVariable)
+				if !ok {
+					continue
+				}
+
+				if rv.Multi && rv.Index == -1 && rv.Type == r.Type && rv.Name == r.Name {
+					errs = append(errs, fmt.Errorf(
+						"%s: connection info cannot contain splat variable "+
+							"referencing itself", n))
+					break
+				}
+			}
+
+			for _, v := range p.RawConfig.Variables {
+				rv, ok := v.(*ResourceVariable)
+				if !ok {
+					continue
+				}
+
+				if rv.Multi && rv.Index == -1 && rv.Type == r.Type && rv.Name == r.Name {
+					errs = append(errs, fmt.Errorf(
+						"%s: connection info cannot contain splat variable "+
+							"referencing itself", n))
+					break
+				}
 			}
 		}
 	}
@@ -419,6 +510,13 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf(
 				"%s: output should only have 'value' field", o.Name))
 		}
+
+		for _, v := range o.RawConfig.Variables {
+			if _, ok := v.(*CountVariable); ok {
+				errs = append(errs, fmt.Errorf(
+					"%s: count variables are only valid within resources", o.Name))
+			}
+		}
 	}
 
 	// Check that all variables are in the proper context
@@ -429,6 +527,22 @@ func (c *Config) Validate() error {
 		if err := reflectwalk.Walk(rc.Raw, walker); err != nil {
 			errs = append(errs, fmt.Errorf(
 				"%s: error reading config: %s", source, err))
+		}
+	}
+
+	// Validate the self variable
+	for source, rc := range c.rawConfigs() {
+		// Ignore provisioners. This is a pretty brittle way to do this,
+		// but better than also repeating all the resources.
+		if strings.Contains(source, "provision") {
+			continue
+		}
+
+		for _, v := range rc.Variables {
+			if _, ok := v.(*SelfVariable); ok {
+				errs = append(errs, fmt.Errorf(
+					"%s: cannot contain self-reference %s", source, v.FullKey()))
+			}
 		}
 	}
 
@@ -456,6 +570,11 @@ func (c *Config) InterpolatedVariables() map[string][]InterpolatedVariable {
 // a human-friendly source.
 func (c *Config) rawConfigs() map[string]*RawConfig {
 	result := make(map[string]*RawConfig)
+	for _, m := range c.Modules {
+		source := fmt.Sprintf("module '%s'", m.Name)
+		result[source] = m.RawConfig
+	}
+
 	for _, pc := range c.ProviderConfigs {
 		source := fmt.Sprintf("provider config '%s'", pc.Name)
 		result[source] = pc.RawConfig
@@ -562,6 +681,14 @@ func (o *Output) mergerMerge(m merger) merger {
 	result.RawConfig = result.RawConfig.merge(o2.RawConfig)
 
 	return &result
+}
+
+func (c *ProviderConfig) FullName() string {
+	if c.Alias == "" {
+		return c.Name
+	}
+
+	return fmt.Sprintf("%s.%s", c.Name, c.Alias)
 }
 
 func (c *ProviderConfig) mergerName() string {

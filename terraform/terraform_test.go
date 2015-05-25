@@ -5,9 +5,11 @@ import (
 	"crypto/sha1"
 	"encoding/gob"
 	"encoding/hex"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -45,6 +47,14 @@ func tempDir(t *testing.T) string {
 	return dir
 }
 
+// tempEnv lets you temporarily set an environment variable. It returns
+// the old value that should be set via a defer.
+func tempEnv(t *testing.T, k string, v string) string {
+	old := os.Getenv(k)
+	os.Setenv(k, v)
+	return old
+}
+
 func testConfig(t *testing.T, name string) *config.Config {
 	c, err := config.Load(filepath.Join(fixtureDir, name, "main.tf"))
 	if err != nil {
@@ -66,6 +76,14 @@ func testModule(t *testing.T, name string) *module.Tree {
 	}
 
 	return mod
+}
+
+func testStringMatch(t *testing.T, s fmt.Stringer, expected string) {
+	actual := strings.TrimSpace(s.String())
+	expected = strings.TrimSpace(expected)
+	if actual != expected {
+		t.Fatalf("Actual\n\n%s\n\nExpected:\n\n%s", actual, expected)
+	}
 }
 
 func testProviderFuncFixed(rp ResourceProvider) ResourceProviderFactory {
@@ -140,6 +158,14 @@ aws_instance.foo:
   type = aws_instance
 `
 
+const testTerraformInputVarOnlyUnsetStr = `
+aws_instance.foo:
+  ID = foo
+  bar = baz
+  foo = foovalue
+  type = aws_instance
+`
+
 const testTerraformInputVarsStr = `
 aws_instance.bar:
   ID = foo
@@ -156,6 +182,18 @@ aws_instance.foo:
 const testTerraformApplyStr = `
 aws_instance.bar:
   ID = foo
+  foo = bar
+  type = aws_instance
+aws_instance.foo:
+  ID = foo
+  num = 2
+  type = aws_instance
+`
+
+const testTerraformApplyProviderAliasStr = `
+aws_instance.bar:
+  ID = foo
+  provider = aws.bar
   foo = bar
   type = aws_instance
 aws_instance.foo:
@@ -200,6 +238,13 @@ aws_instance.bar:
   type = aws_instance
 `
 
+const testTerraformApplyCreateBeforeUpdateStr = `
+aws_instance.bar:
+  ID = foo
+  foo = baz
+  type = aws_instance
+`
+
 const testTerraformApplyCancelStr = `
 aws_instance.foo:
   ID = foo
@@ -233,9 +278,32 @@ aws_instance.foo.1:
 `
 
 const testTerraformApplyCountDecToOneStr = `
-aws_instance.foo.0:
+aws_instance.foo:
   ID = bar
   foo = foo
+  type = aws_instance
+`
+
+const testTerraformApplyCountDecToOneCorruptedStr = `
+aws_instance.foo:
+  ID = bar
+  foo = foo
+  type = aws_instance
+`
+
+const testTerraformApplyCountDecToOneCorruptedPlanStr = `
+DIFF:
+
+DESTROY: aws_instance.foo.0
+
+STATE:
+
+aws_instance.foo:
+  ID = bar
+  foo = foo
+  type = aws_instance
+aws_instance.foo.0:
+  ID = baz
   type = aws_instance
 `
 
@@ -276,6 +344,46 @@ module.child:
     ID = foo
     foo = bar
     type = aws_instance
+`
+
+const testTerraformApplyModuleBoolStr = `
+aws_instance.bar:
+  ID = foo
+  foo = 1
+  type = aws_instance
+
+  Dependencies:
+    module.child
+
+module.child:
+  <no state>
+  Outputs:
+
+  leader = 1
+`
+
+const testTerraformApplyModuleDestroyOrderStr = `
+<no state>
+module.child:
+  <no state>
+`
+
+const testTerraformApplyMultiProviderStr = `
+aws_instance.bar:
+  ID = foo
+  foo = bar
+  type = aws_instance
+do_instance.foo:
+  ID = foo
+  num = 2
+  type = do_instance
+`
+
+const testTerraformApplyOutputOrphanStr = `
+<no state>
+Outputs:
+
+foo = bar
 `
 
 const testTerraformApplyProvisionerStr = `
@@ -325,6 +433,28 @@ aws_instance.bar:
   type = aws_instance
 `
 
+const testTerraformApplyProvisionerSelfRefStr = `
+aws_instance.foo:
+  ID = foo
+  foo = bar
+  type = aws_instance
+`
+
+const testTerraformApplyProvisionerMultiSelfRefStr = `
+aws_instance.foo.0:
+  ID = foo
+  foo = number 0
+  type = aws_instance
+aws_instance.foo.1:
+  ID = foo
+  foo = number 1
+  type = aws_instance
+aws_instance.foo.2:
+  ID = foo
+  foo = number 2
+  type = aws_instance
+`
+
 const testTerraformApplyProvisionerDiffStr = `
 aws_instance.bar:
   ID = foo
@@ -354,9 +484,9 @@ aws_instance.bar:
 `
 
 const testTerraformApplyErrorDestroyCreateBeforeDestroyStr = `
-aws_instance.bar: (1 tainted)
+aws_instance.bar: (1 deposed)
   ID = foo
-  Tainted ID 1 = bar
+  Deposed ID 1 = bar
 `
 
 const testTerraformApplyErrorPartialStr = `
@@ -372,6 +502,36 @@ aws_instance.foo:
 
 const testTerraformApplyTaintStr = `
 aws_instance.bar:
+  ID = foo
+  num = 2
+  type = aws_instance
+`
+
+const testTerraformApplyTaintDepStr = `
+aws_instance.bar:
+  ID = bar
+  foo = foo
+  num = 2
+  type = aws_instance
+
+  Dependencies:
+    aws_instance.foo
+aws_instance.foo:
+  ID = foo
+  num = 2
+  type = aws_instance
+`
+
+const testTerraformApplyTaintDepRequireNewStr = `
+aws_instance.bar:
+  ID = foo
+  foo = foo
+  require_new = yes
+  type = aws_instance
+
+  Dependencies:
+    aws_instance.foo
+aws_instance.foo:
   ID = foo
   num = 2
   type = aws_instance
@@ -479,6 +639,13 @@ aws_instance.foo:
   ID = foo
   bar = baz
   num = 2
+  type = aws_instance
+`
+
+const testTerraformApplyVarsEnvStr = `
+aws_instance.bar:
+  ID = foo
+  foo = baz
   type = aws_instance
 `
 
@@ -710,6 +877,32 @@ aws_instance.foo.0:
   type = aws_instance
 `
 
+const testTerraformPlanCountIncreaseFromOneCorruptedStr = `
+DIFF:
+
+CREATE: aws_instance.bar
+  foo:  "" => "bar"
+  type: "" => "aws_instance"
+DESTROY: aws_instance.foo
+CREATE: aws_instance.foo.1
+  foo:  "" => "foo"
+  type: "" => "aws_instance"
+CREATE: aws_instance.foo.2
+  foo:  "" => "foo"
+  type: "" => "aws_instance"
+
+STATE:
+
+aws_instance.foo:
+  ID = bar
+  foo = foo
+  type = aws_instance
+aws_instance.foo.0:
+  ID = bar
+  foo = foo
+  type = aws_instance
+`
+
 const testTerraformPlanDestroyStr = `
 DIFF:
 
@@ -771,6 +964,19 @@ STATE:
 <no state>
 `
 
+const testTerraformPlanModuleCycleStr = `
+DIFF:
+
+CREATE: aws_instance.b
+CREATE: aws_instance.c
+  some_input: "" => "<computed>"
+  type:       "" => "aws_instance"
+
+STATE:
+
+<no state>
+`
+
 const testTerraformPlanModuleDestroyStr = `
 DIFF:
 
@@ -788,6 +994,26 @@ aws_instance.foo:
 module.child:
   aws_instance.foo:
     ID = bar
+`
+
+const testTerraformPlanModuleDestroyCycleStr = `
+DIFF:
+
+module.a_module:
+  DESTROY MODULE
+  DESTROY: aws_instance.a
+module.b_module:
+  DESTROY MODULE
+  DESTROY: aws_instance.b
+
+STATE:
+
+module.a_module:
+  aws_instance.a:
+    ID = a
+module.b_module:
+  aws_instance.b:
+    ID = b
 `
 
 const testTerraformPlanModuleDestroyMultivarStr = `

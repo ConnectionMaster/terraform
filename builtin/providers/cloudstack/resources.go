@@ -5,6 +5,7 @@ import (
 	"log"
 	"regexp"
 
+	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/xanzy/go-cloudstack/cloudstack"
 )
 
@@ -16,6 +17,14 @@ type retrieveError struct {
 
 func (e *retrieveError) Error() error {
 	return fmt.Errorf("Error retrieving UUID of %s %s: %s", e.name, e.value, e.err)
+}
+
+func setValueOrUUID(d *schema.ResourceData, key string, value string, uuid string) {
+	if isUUID(d.Get(key).(string)) {
+		d.Set(key, uuid)
+	} else {
+		d.Set(key, value)
+	}
 }
 
 func retrieveUUID(cs *cloudstack.CloudStackClient, name, value string) (uuid string, e *retrieveError) {
@@ -40,8 +49,6 @@ func retrieveUUID(cs *cloudstack.CloudStackClient, name, value string) (uuid str
 		uuid, err = cs.VPC.GetVPCOfferingID(value)
 	case "vpc":
 		uuid, err = cs.VPC.GetVPCID(value)
-	case "template":
-		uuid, err = cs.Template.GetTemplateID(value, "executable")
 	case "network":
 		uuid, err = cs.Network.GetNetworkID(value)
 	case "zone":
@@ -59,6 +66,19 @@ func retrieveUUID(cs *cloudstack.CloudStackClient, name, value string) (uuid str
 			break
 		}
 		err = fmt.Errorf("Could not find UUID of IP address: %s", value)
+	case "os_type":
+		p := cs.GuestOS.NewListOsTypesParams()
+		p.SetDescription(value)
+		l, e := cs.GuestOS.ListOsTypes(p)
+		if e != nil {
+			err = e
+			break
+		}
+		if l.Count == 1 {
+			uuid = l.OsTypes[0].Id
+			break
+		}
+		err = fmt.Errorf("Could not find UUID of OS Type: %s", value)
 	default:
 		return uuid, &retrieveError{name: name, value: value,
 			err: fmt.Errorf("Unknown request: %s", name)}
@@ -66,6 +86,22 @@ func retrieveUUID(cs *cloudstack.CloudStackClient, name, value string) (uuid str
 
 	if err != nil {
 		return uuid, &retrieveError{name: name, value: value, err: err}
+	}
+
+	return uuid, nil
+}
+
+func retrieveTemplateUUID(cs *cloudstack.CloudStackClient, zoneid, value string) (uuid string, e *retrieveError) {
+	// If the supplied value isn't a UUID, try to retrieve the UUID ourselves
+	if isUUID(value) {
+		return value, nil
+	}
+
+	log.Printf("[DEBUG] Retrieving UUID of template: %s", value)
+
+	uuid, err := cs.Template.GetTemplateID(value, "executable", zoneid)
+	if err != nil {
+		return uuid, &retrieveError{name: "template", value: value, err: err}
 	}
 
 	return uuid, nil

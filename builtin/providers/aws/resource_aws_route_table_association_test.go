@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/aws/awserr"
+	"github.com/awslabs/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/goamz/ec2"
 )
 
 func TestAccAWSRouteTableAssociation(t *testing.T) {
@@ -45,15 +47,16 @@ func testAccCheckRouteTableAssociationDestroy(s *terraform.State) error {
 		}
 
 		// Try to find the resource
-		resp, err := conn.DescribeRouteTables(
-			[]string{rs.Primary.Attributes["route_table_Id"]}, ec2.NewFilter())
+		resp, err := conn.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+			RouteTableIDs: []*string{aws.String(rs.Primary.Attributes["route_table_id"])},
+		})
 		if err != nil {
 			// Verify the error is what we want
-			ec2err, ok := err.(*ec2.Error)
+			ec2err, ok := err.(awserr.Error)
 			if !ok {
 				return err
 			}
-			if ec2err.Code != "InvalidRouteTableID.NotFound" {
+			if ec2err.Code() != "InvalidRouteTableID.NotFound" {
 				return err
 			}
 			return nil
@@ -62,7 +65,7 @@ func testAccCheckRouteTableAssociationDestroy(s *terraform.State) error {
 		rt := resp.RouteTables[0]
 		if len(rt.Associations) > 0 {
 			return fmt.Errorf(
-				"route table %s has associations", rt.RouteTableId)
+				"route table %s has associations", *rt.RouteTableID)
 
 		}
 	}
@@ -82,8 +85,9 @@ func testAccCheckRouteTableAssociationExists(n string, v *ec2.RouteTable) resour
 		}
 
 		conn := testAccProvider.Meta().(*AWSClient).ec2conn
-		resp, err := conn.DescribeRouteTables(
-			[]string{rs.Primary.Attributes["route_table_id"]}, ec2.NewFilter())
+		resp, err := conn.DescribeRouteTables(&ec2.DescribeRouteTablesInput{
+			RouteTableIDs: []*string{aws.String(rs.Primary.Attributes["route_table_id"])},
+		})
 		if err != nil {
 			return err
 		}
@@ -91,7 +95,7 @@ func testAccCheckRouteTableAssociationExists(n string, v *ec2.RouteTable) resour
 			return fmt.Errorf("RouteTable not found")
 		}
 
-		*v = resp.RouteTables[0]
+		*v = *resp.RouteTables[0]
 
 		if len(v.Associations) == 0 {
 			return fmt.Errorf("no associations")

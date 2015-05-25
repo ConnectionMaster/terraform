@@ -4,7 +4,7 @@ This subdirectory contains the entire source for the [Terraform Website](http://
 This is a [Middleman](http://middlemanapp.com) project, which builds a static
 site from these source files.
 
-## Contributions Welcome!
+## Contributions Welcome
 
 If you find a typo or you feel like you can improve the HTML, CSS, or
 JavaScript, we welcome contributions. Feel free to open issues or pull
@@ -12,12 +12,14 @@ requests like any normal GitHub project, and we'll merge it in.
 
 ## Running the Site Locally
 
-Running the site locally is simple. Clone this repo and run the following
-commands:
+Running the site locally is simple. First you need a working copy of [Ruby >= 2.0](https://www.ruby-lang.org/en/downloads/) and [Bundler](http://bundler.io/).
+Then you can clone this repo and run the following commands from this directory:
 
 ```
 $ bundle
+# ( installs all gem dependencies )
 $ bundle exec middleman server
+# ( boots the local server )
 ```
 
 Then open up `http://localhost:4567`. Note that some URLs you may need to append

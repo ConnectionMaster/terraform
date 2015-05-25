@@ -21,7 +21,7 @@ func TestAccCloudStackNetworkACLRule_basic(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudStackNetworkACLRulesExist("cloudstack_network_acl.foo"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.#", "1"),
+						"cloudstack_network_acl_rule.foo", "rule.#", "3"),
 					resource.TestCheckResourceAttr(
 						"cloudstack_network_acl_rule.foo", "rule.3247834462.action", "allow"),
 					resource.TestCheckResourceAttr(
@@ -53,7 +53,7 @@ func TestAccCloudStackNetworkACLRule_update(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudStackNetworkACLRulesExist("cloudstack_network_acl.foo"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.#", "1"),
+						"cloudstack_network_acl_rule.foo", "rule.#", "3"),
 					resource.TestCheckResourceAttr(
 						"cloudstack_network_acl_rule.foo", "rule.3247834462.action", "allow"),
 					resource.TestCheckResourceAttr(
@@ -76,7 +76,7 @@ func TestAccCloudStackNetworkACLRule_update(t *testing.T) {
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckCloudStackNetworkACLRulesExist("cloudstack_network_acl.foo"),
 					resource.TestCheckResourceAttr(
-						"cloudstack_network_acl_rule.foo", "rule.#", "2"),
+						"cloudstack_network_acl_rule.foo", "rule.#", "4"),
 					resource.TestCheckResourceAttr(
 						"cloudstack_network_acl_rule.foo", "rule.3247834462.action", "allow"),
 					resource.TestCheckResourceAttr(
@@ -190,14 +190,29 @@ resource "cloudstack_network_acl_rule" "foo" {
   aclid = "${cloudstack_network_acl.foo.id}"
 
   rule {
-	  action = "allow"
+  	action = "allow"
+    source_cidr = "172.18.100.0/24"
+    protocol = "all"
+    traffic_type = "ingress"
+  }
+
+  rule {
+  	action = "allow"
+    source_cidr = "172.18.100.0/24"
+    protocol = "icmp"
+    icmp_type = "-1"
+    icmp_code = "-1"
+    traffic_type = "ingress"
+  }
+
+  rule {
     source_cidr = "172.16.100.0/24"
     protocol = "tcp"
     ports = ["80", "443"]
     traffic_type = "ingress"
   }
 }`,
-	CLOUDSTACK_VPC_CIDR,
+	CLOUDSTACK_VPC_CIDR_1,
 	CLOUDSTACK_VPC_OFFERING,
 	CLOUDSTACK_ZONE)
 
@@ -212,11 +227,27 @@ resource "cloudstack_vpc" "foobar" {
 resource "cloudstack_network_acl" "foo" {
   name = "terraform-acl"
   description = "terraform-acl-text"
-  vpc = "${cloudstack_vpc.foobar.name}"
+  vpc = "${cloudstack_vpc.foobar.id}"
 }
 
 resource "cloudstack_network_acl_rule" "foo" {
   aclid = "${cloudstack_network_acl.foo.id}"
+
+  rule {
+  	action = "deny"
+    source_cidr = "172.18.100.0/24"
+    protocol = "all"
+    traffic_type = "ingress"
+  }
+
+  rule {
+  	action = "deny"
+    source_cidr = "172.18.100.0/24"
+    protocol = "icmp"
+    icmp_type = "-1"
+    icmp_code = "-1"
+    traffic_type = "ingress"
+  }
 
   rule {
 	  action = "allow"
@@ -234,6 +265,6 @@ resource "cloudstack_network_acl_rule" "foo" {
     traffic_type = "egress"
   }
 }`,
-	CLOUDSTACK_VPC_CIDR,
+	CLOUDSTACK_VPC_CIDR_1,
 	CLOUDSTACK_VPC_OFFERING,
 	CLOUDSTACK_ZONE)

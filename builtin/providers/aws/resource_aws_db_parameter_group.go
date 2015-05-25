@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/mitchellh/goamz/rds"
+
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/aws/awserr"
+	"github.com/awslabs/aws-sdk-go/service/rds"
 )
 
 func resourceAwsDbParameterGroup() *schema.Resource {
@@ -72,10 +76,10 @@ func resourceAwsDbParameterGroup() *schema.Resource {
 func resourceAwsDbParameterGroupCreate(d *schema.ResourceData, meta interface{}) error {
 	rdsconn := meta.(*AWSClient).rdsconn
 
-	createOpts := rds.CreateDBParameterGroup{
-		DBParameterGroupName:   d.Get("name").(string),
-		DBParameterGroupFamily: d.Get("family").(string),
-		Description:            d.Get("description").(string),
+	createOpts := rds.CreateDBParameterGroupInput{
+		DBParameterGroupName:   aws.String(d.Get("name").(string)),
+		DBParameterGroupFamily: aws.String(d.Get("family").(string)),
+		Description:            aws.String(d.Get("description").(string)),
 	}
 
 	log.Printf("[DEBUG] Create DB Parameter Group: %#v", createOpts)
@@ -90,7 +94,7 @@ func resourceAwsDbParameterGroupCreate(d *schema.ResourceData, meta interface{})
 	d.SetPartial("description")
 	d.Partial(false)
 
-	d.SetId(createOpts.DBParameterGroupName)
+	d.SetId(*createOpts.DBParameterGroupName)
 	log.Printf("[INFO] DB Parameter Group ID: %s", d.Id())
 
 	return resourceAwsDbParameterGroupUpdate(d, meta)
@@ -99,8 +103,8 @@ func resourceAwsDbParameterGroupCreate(d *schema.ResourceData, meta interface{})
 func resourceAwsDbParameterGroupRead(d *schema.ResourceData, meta interface{}) error {
 	rdsconn := meta.(*AWSClient).rdsconn
 
-	describeOpts := rds.DescribeDBParameterGroups{
-		DBParameterGroupName: d.Id(),
+	describeOpts := rds.DescribeDBParameterGroupsInput{
+		DBParameterGroupName: aws.String(d.Id()),
 	}
 
 	describeResp, err := rdsconn.DescribeDBParameterGroups(&describeOpts)
@@ -109,7 +113,7 @@ func resourceAwsDbParameterGroupRead(d *schema.ResourceData, meta interface{}) e
 	}
 
 	if len(describeResp.DBParameterGroups) != 1 ||
-		describeResp.DBParameterGroups[0].DBParameterGroupName != d.Id() {
+		*describeResp.DBParameterGroups[0].DBParameterGroupName != d.Id() {
 		return fmt.Errorf("Unable to find Parameter Group: %#v", describeResp.DBParameterGroups)
 	}
 
@@ -118,9 +122,9 @@ func resourceAwsDbParameterGroupRead(d *schema.ResourceData, meta interface{}) e
 	d.Set("description", describeResp.DBParameterGroups[0].Description)
 
 	// Only include user customized parameters as there's hundreds of system/default ones
-	describeParametersOpts := rds.DescribeDBParameters{
-		DBParameterGroupName: d.Id(),
-		Source:               "user",
+	describeParametersOpts := rds.DescribeDBParametersInput{
+		DBParameterGroupName: aws.String(d.Id()),
+		Source:               aws.String("user"),
 	}
 
 	describeParametersResp, err := rdsconn.DescribeDBParameters(&describeParametersOpts)
@@ -150,15 +154,15 @@ func resourceAwsDbParameterGroupUpdate(d *schema.ResourceData, meta interface{})
 		os := o.(*schema.Set)
 		ns := n.(*schema.Set)
 
-		// Expand the "parameter" set to goamz compat []rds.Parameter
+		// Expand the "parameter" set to aws-sdk-go compat []rds.Parameter
 		parameters, err := expandParameters(ns.Difference(os).List())
 		if err != nil {
 			return err
 		}
 
 		if len(parameters) > 0 {
-			modifyOpts := rds.ModifyDBParameterGroup{
-				DBParameterGroupName: d.Get("name").(string),
+			modifyOpts := rds.ModifyDBParameterGroupInput{
+				DBParameterGroupName: aws.String(d.Get("name").(string)),
 				Parameters:           parameters,
 			}
 
@@ -195,17 +199,17 @@ func resourceAwsDbParameterGroupDeleteRefreshFunc(
 
 	return func() (interface{}, string, error) {
 
-		deleteOpts := rds.DeleteDBParameterGroup{
-			DBParameterGroupName: d.Id(),
+		deleteOpts := rds.DeleteDBParameterGroupInput{
+			DBParameterGroupName: aws.String(d.Id()),
 		}
 
 		if _, err := rdsconn.DeleteDBParameterGroup(&deleteOpts); err != nil {
-			rdserr, ok := err.(*rds.Error)
+			rdserr, ok := err.(awserr.Error)
 			if !ok {
 				return d, "error", err
 			}
 
-			if rdserr.Code != "DBParameterGroupNotFoundFault" {
+			if rdserr.Code() != "DBParameterGroupNotFoundFault" {
 				return d, "error", err
 			}
 		}
@@ -218,7 +222,8 @@ func resourceAwsDbParameterHash(v interface{}) int {
 	var buf bytes.Buffer
 	m := v.(map[string]interface{})
 	buf.WriteString(fmt.Sprintf("%s-", m["name"].(string)))
-	buf.WriteString(fmt.Sprintf("%s-", m["value"].(string)))
+	// Store the value as a lower case string, to match how we store them in flattenParameters
+	buf.WriteString(fmt.Sprintf("%s-", strings.ToLower(m["value"].(string))))
 
 	return hashcode.String(buf.String())
 }

@@ -6,14 +6,16 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime"
 
-	"code.google.com/p/google-api-go-client/compute/v1"
-
+	// TODO(dcunnin): Use version code from version.go
+	// "github.com/hashicorp/terraform"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"golang.org/x/oauth2/jwt"
+	"google.golang.org/api/compute/v1"
+	"google.golang.org/api/dns/v1"
 )
-
 
 // Config is the configuration structure used to instantiate the Google
 // provider.
@@ -23,6 +25,7 @@ type Config struct {
 	Region      string
 
 	clientCompute *compute.Service
+	clientDns *dns.Service
 }
 
 func (c *Config) loadAndValidate() error {
@@ -49,7 +52,10 @@ func (c *Config) loadAndValidate() error {
 				err)
 		}
 
-		clientScopes := []string{"https://www.googleapis.com/auth/compute"}
+		clientScopes := []string{
+			"https://www.googleapis.com/auth/compute",
+			"https://www.googleapis.com/auth/ndev.clouddns.readwrite",
+		}
 
 		// Get the token for use in our requests
 		log.Printf("[INFO] Requesting Google token...")
@@ -82,12 +88,31 @@ func (c *Config) loadAndValidate() error {
 
 	}
 
-	log.Printf("[INFO] Instantiating GCE client...")
+	// Build UserAgent
+	versionString := "0.0.0"
+	// TODO(dcunnin): Use Terraform's version code from version.go
+	// versionString := main.Version
+	// if main.VersionPrerelease != "" {
+	// 	versionString = fmt.Sprintf("%s-%s", versionString, main.VersionPrerelease)
+	// }
+	userAgent := fmt.Sprintf(
+		"(%s %s) Terraform/%s", runtime.GOOS, runtime.GOARCH, versionString)
+
 	var err error
+
+	log.Printf("[INFO] Instantiating GCE client...")
 	c.clientCompute, err = compute.New(client)
 	if err != nil {
 		return err
 	}
+	c.clientCompute.UserAgent = userAgent
+
+	log.Printf("[INFO] Instantiating Google Cloud DNS client...")
+	c.clientDns, err = dns.New(client)
+	if err != nil {
+		return err
+	}
+	c.clientDns.UserAgent = userAgent
 
 	return nil
 }

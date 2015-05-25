@@ -1,7 +1,6 @@
 #!/bin/bash
 #
 # This script builds the application from source for multiple platforms.
-set -e
 
 # Get the parent directory of where this script is.
 SOURCE="${BASH_SOURCE[0]}"
@@ -19,9 +18,11 @@ GIT_DIRTY=$(test -n "`git status --porcelain`" && echo "+CHANGES" || true)
 XC_ARCH=${XC_ARCH:-"386 amd64 arm"}
 XC_OS=${XC_OS:-linux darwin windows freebsd openbsd}
 
-# Install dependencies
-echo "==> Getting dependencies..."
-go get ./...
+# Get dependencies unless running in quick mode
+if [ "${TF_QUICKDEV}x" == "x" ]; then
+    echo "==> Getting dependencies..."
+    go get -d ./...
+fi
 
 # Delete the old dir
 echo "==> Removing old directory..."
@@ -62,6 +63,12 @@ esac
 OLDIFS=$IFS
 IFS=: MAIN_GOPATH=($GOPATH)
 IFS=$OLDIFS
+
+# Create GOPATH/bin if it's doesn't exists
+if [ ! -d $MAIN_GOPATH/bin ]; then
+    echo "==> Creating GOPATH/bin directory..."
+    mkdir -p $MAIN_GOPATH/bin
+fi
 
 # Copy our OS/Arch to the bin/ directory
 DEV_PLATFORM="./pkg/$(go env GOOS)_$(go env GOARCH)"

@@ -5,11 +5,20 @@ import (
 	"log"
 	"time"
 
-	"code.google.com/p/google-api-go-client/compute/v1"
-	"code.google.com/p/google-api-go-client/googleapi"
 	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/schema"
+	"google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
 )
+
+func stringHashcode(v interface{}) int {
+	return hashcode.String(v.(string))
+}
+
+func stringScopeHashcode(v interface{}) int {
+	v = canonicalizeServiceScope(v.(string))
+	return hashcode.String(v.(string))
+}
 
 func resourceComputeInstance() *schema.Resource {
 	return &schema.Resource{
@@ -17,6 +26,9 @@ func resourceComputeInstance() *schema.Resource {
 		Read:   resourceComputeInstanceRead,
 		Update: resourceComputeInstanceUpdate,
 		Delete: resourceComputeInstanceDelete,
+
+		SchemaVersion: 2,
+		MigrateState:  resourceComputeInstanceMigrateState,
 
 		Schema: map[string]*schema.Schema{
 			"name": &schema.Schema{
@@ -69,10 +81,28 @@ func resourceComputeInstance() *schema.Resource {
 							ForceNew: true,
 						},
 
-						"auto_delete": &schema.Schema{
+						"scratch": &schema.Schema{
 							Type:     schema.TypeBool,
 							Optional: true,
 							ForceNew: true,
+						},
+
+						"auto_delete": &schema.Schema{
+							Type:     schema.TypeBool,
+							Optional: true,
+							Default:  true,
+							ForceNew: true,
+						},
+
+						"size": &schema.Schema{
+							Type:     schema.TypeInt,
+							Optional: true,
+							ForceNew: true,
+						},
+
+						"device_name": &schema.Schema{
+							Type: schema.TypeString,
+							Optional: true,
 						},
 					},
 				},
@@ -106,7 +136,7 @@ func resourceComputeInstance() *schema.Resource {
 							Elem: &schema.Resource{
 								Schema: map[string]*schema.Schema{
 									"nat_ip": &schema.Schema{
-										Type: schema.TypeString,
+										Type:     schema.TypeString,
 										Computed: true,
 										Optional: true,
 									},
@@ -121,6 +151,7 @@ func resourceComputeInstance() *schema.Resource {
 				Type:     schema.TypeList,
 				Optional: true,
 				ForceNew: true,
+				Deprecated: "Please use network_interface",
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"source": &schema.Schema{
@@ -161,11 +192,9 @@ func resourceComputeInstance() *schema.Resource {
 			},
 
 			"metadata": &schema.Schema{
-				Type:     schema.TypeList,
+				Type:     schema.TypeMap,
 				Optional: true,
-				Elem: &schema.Schema{
-					Type: schema.TypeMap,
-				},
+				Elem:     schema.TypeString,
 			},
 
 			"service_account": &schema.Schema{
@@ -181,7 +210,7 @@ func resourceComputeInstance() *schema.Resource {
 						},
 
 						"scopes": &schema.Schema{
-							Type:     schema.TypeList,
+							Type:     schema.TypeSet,
 							Required: true,
 							ForceNew: true,
 							Elem: &schema.Schema{
@@ -190,6 +219,7 @@ func resourceComputeInstance() *schema.Resource {
 									return canonicalizeServiceScope(v.(string))
 								},
 							},
+							Set: stringScopeHashcode,
 						},
 					},
 				},
@@ -199,9 +229,7 @@ func resourceComputeInstance() *schema.Resource {
 				Type:     schema.TypeSet,
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
-				Set: func(v interface{}) int {
-					return hashcode.String(v.(string))
-				},
+				Set: stringHashcode,
 			},
 
 			"metadata_fingerprint": &schema.Schema{
@@ -248,7 +276,6 @@ func resourceOperationWaitZone(
 	return nil
 }
 
-
 func resourceComputeInstanceCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)
 
@@ -284,11 +311,7 @@ func resourceComputeInstanceCreate(d *schema.ResourceData, meta interface{}) err
 		disk.Type = "PERSISTENT"
 		disk.Mode = "READ_WRITE"
 		disk.Boot = i == 0
-		disk.AutoDelete = true
-
-		if v, ok := d.GetOk(prefix + ".auto_delete"); ok {
-			disk.AutoDelete = v.(bool)
-		}
+		disk.AutoDelete = d.Get(prefix + ".auto_delete").(bool)
 
 		// Load up the disk for this disk if specified
 		if v, ok := d.GetOk(prefix + ".disk"); ok {
@@ -302,12 +325,20 @@ func resourceComputeInstanceCreate(d *schema.ResourceData, meta interface{}) err
 			}
 
 			disk.Source = diskData.SelfLink
+		} else {
+			// Create a new disk
+			disk.InitializeParams = &compute.AttachedDiskInitializeParams{ }
+		}
+
+		if v, ok := d.GetOk(prefix + ".scratch"); ok {
+			if v.(bool) {
+				disk.Type = "SCRATCH"
+			}
 		}
 
 		// Load up the image for this disk if specified
 		if v, ok := d.GetOk(prefix + ".image"); ok {
 			imageName := v.(string)
-
 
 			imageUrl, err := resolveImage(config, imageName)
 			if err != nil {
@@ -316,9 +347,7 @@ func resourceComputeInstanceCreate(d *schema.ResourceData, meta interface{}) err
 					imageName, err)
 			}
 
-			disk.InitializeParams = &compute.AttachedDiskInitializeParams{
-				SourceImage: imageUrl,
-			}
+			disk.InitializeParams.SourceImage = imageUrl
 		}
 
 		if v, ok := d.GetOk(prefix + ".type"); ok {
@@ -331,6 +360,15 @@ func resourceComputeInstanceCreate(d *schema.ResourceData, meta interface{}) err
 			}
 
 			disk.InitializeParams.DiskType = diskType.SelfLink
+		}
+
+		if v, ok := d.GetOk(prefix + ".size"); ok {
+			diskSizeGb := v.(int)
+			disk.InitializeParams.DiskSizeGb = int64(diskSizeGb)
+		}
+
+		if v, ok := d.GetOk(prefix  + ".device_name"); ok {
+			disk.DeviceName = v.(string)
 		}
 
 		disks = append(disks, &disk)
@@ -417,11 +455,10 @@ func resourceComputeInstanceCreate(d *schema.ResourceData, meta interface{}) err
 	for i := 0; i < serviceAccountsCount; i++ {
 		prefix := fmt.Sprintf("service_account.%d", i)
 
-		scopesCount := d.Get(prefix + ".scopes.#").(int)
-		scopes := make([]string, 0, scopesCount)
-		for j := 0; j < scopesCount; j++ {
-			scope := d.Get(fmt.Sprintf(prefix+".scopes.%d", j)).(string)
-			scopes = append(scopes, canonicalizeServiceScope(scope))
+		scopesSet := d.Get(prefix + ".scopes").(*schema.Set)
+		scopes := make([]string, scopesSet.Len())
+		for i, v := range scopesSet.List() {
+			scopes[i] = canonicalizeServiceScope(v.(string))
 		}
 
 		serviceAccount := &compute.ServiceAccount{
@@ -485,14 +522,18 @@ func resourceComputeInstanceRead(d *schema.ResourceData, meta interface{}) error
 	d.Set("can_ip_forward", instance.CanIpForward)
 
 	// Set the service accounts
-	for i, serviceAccount := range instance.ServiceAccounts {
-		prefix := fmt.Sprintf("service_account.%d", i)
-		d.Set(prefix+".email", serviceAccount.Email)
-		d.Set(prefix+".scopes.#", len(serviceAccount.Scopes))
-		for j, scope := range serviceAccount.Scopes {
-			d.Set(fmt.Sprintf("%s.scopes.%d", prefix, j), scope)
+	serviceAccounts := make([]map[string]interface{}, 0, 1)
+	for _, serviceAccount := range instance.ServiceAccounts {
+		scopes := make([]interface{}, len(serviceAccount.Scopes))
+		for i, scope := range serviceAccount.Scopes {
+			scopes[i] = scope
 		}
+		serviceAccounts = append(serviceAccounts, map[string]interface{}{
+			"email":  serviceAccount.Email,
+			"scopes": schema.NewSet(stringScopeHashcode, scopes),
+		})
 	}
+	d.Set("service_account", serviceAccounts)
 
 	networksCount := d.Get("network.#").(int)
 	networkInterfacesCount := d.Get("network_interface.#").(int)
@@ -508,13 +549,10 @@ func resourceComputeInstanceRead(d *schema.ResourceData, meta interface{}) error
 	// Use the first external IP found for the default connection info.
 	externalIP := ""
 	internalIP := ""
+	networks := make([]map[string]interface{}, 0, 1)
 	if networksCount > 0 {
 		// TODO: Remove this when realizing deprecation of .network
 		for i, iface := range instance.NetworkInterfaces {
-			prefix := fmt.Sprintf("network.%d", i)
-			d.Set(prefix+".name", iface.Name)
-			log.Printf(prefix+".name = %s", iface.Name)
-
 			var natIP string
 			for _, config := range iface.AccessConfigs {
 				if config.Type == "ONE_TO_ONE_NAT" {
@@ -526,23 +564,29 @@ func resourceComputeInstanceRead(d *schema.ResourceData, meta interface{}) error
 			if externalIP == "" && natIP != "" {
 				externalIP = natIP
 			}
-			d.Set(prefix+".external_address", natIP)
 
-			d.Set(prefix+".internal_address", iface.NetworkIP)
+			network := make(map[string]interface{})
+			network["name"] = iface.Name
+			network["external_address"] = natIP
+			network["internal_address"] = iface.NetworkIP
+			network["source"] = d.Get(fmt.Sprintf("network.%d.source", i))
+			networks = append(networks, network)
 		}
 	}
+	d.Set("network", networks)
 
+	networkInterfaces := make([]map[string]interface{}, 0, 1)
 	if networkInterfacesCount > 0 {
 		for i, iface := range instance.NetworkInterfaces {
-
-			prefix := fmt.Sprintf("network_interface.%d", i)
-			d.Set(prefix+".name", iface.Name)
-
 			// The first non-empty ip is left in natIP
 			var natIP string
-			for j, config := range iface.AccessConfigs {
-				acPrefix := fmt.Sprintf("%s.access_config.%d", prefix, j)
-				d.Set(acPrefix+".nat_ip", config.NatIP)
+			accessConfigs := make(
+				[]map[string]interface{}, 0, len(iface.AccessConfigs))
+			for _, config := range iface.AccessConfigs {
+				accessConfigs = append(accessConfigs, map[string]interface{}{
+					"nat_ip": config.NatIP,
+				})
+
 				if natIP == "" {
 					natIP = config.NatIP
 				}
@@ -552,14 +596,19 @@ func resourceComputeInstanceRead(d *schema.ResourceData, meta interface{}) error
 				externalIP = natIP
 			}
 
-			d.Set(prefix+".address", iface.NetworkIP)
 			if internalIP == "" {
 				internalIP = iface.NetworkIP
 			}
 
-
+			networkInterfaces = append(networkInterfaces, map[string]interface{}{
+				"name":          iface.Name,
+				"address":       iface.NetworkIP,
+				"network":       d.Get(fmt.Sprintf("network_interface.%d.network", i)),
+				"access_config": accessConfigs,
+			})
 		}
 	}
+	d.Set("network_interface", networkInterfaces)
 
 	// Fall back on internal ip if there is no external ip.  This makes sense in the situation where
 	// terraform is being used on a cloud instance and can therefore access the instances it creates
@@ -654,7 +703,7 @@ func resourceComputeInstanceUpdate(d *schema.ResourceData, meta interface{}) err
 		for i := 0; i < networkInterfacesCount; i++ {
 			prefix := fmt.Sprintf("network_interface.%d", i)
 			instNetworkInterface := instance.NetworkInterfaces[i]
-			networkName := d.Get(prefix+".name").(string)
+			networkName := d.Get(prefix + ".name").(string)
 
 			// TODO: This sanity check is broken by #929, disabled for now (by forcing the equality)
 			networkName = instNetworkInterface.Name
@@ -663,7 +712,7 @@ func resourceComputeInstanceUpdate(d *schema.ResourceData, meta interface{}) err
 				return fmt.Errorf("Instance networkInterface had unexpected name: %s", instNetworkInterface.Name)
 			}
 
-			if d.HasChange(prefix+".access_config") {
+			if d.HasChange(prefix + ".access_config") {
 
 				// TODO: This code deletes then recreates accessConfigs.  This is bad because it may
 				// leave the machine inaccessible from either ip if the creation part fails (network
@@ -672,9 +721,9 @@ func resourceComputeInstanceUpdate(d *schema.ResourceData, meta interface{}) err
 				// necessary, and also add before removing.
 
 				// Delete any accessConfig that currently exists in instNetworkInterface
-				for _, ac := range(instNetworkInterface.AccessConfigs) {
+				for _, ac := range instNetworkInterface.AccessConfigs {
 					op, err := config.clientCompute.Instances.DeleteAccessConfig(
-						config.Project, zone, d.Id(), networkName, ac.Name).Do();
+						config.Project, zone, d.Id(), ac.Name, networkName).Do()
 					if err != nil {
 						return fmt.Errorf("Error deleting old access_config: %s", err)
 					}
@@ -693,7 +742,7 @@ func resourceComputeInstanceUpdate(d *schema.ResourceData, meta interface{}) err
 						NatIP: d.Get(acPrefix + ".nat_ip").(string),
 					}
 					op, err := config.clientCompute.Instances.AddAccessConfig(
-						config.Project, zone, d.Id(), networkName, ac).Do();
+						config.Project, zone, d.Id(), networkName, ac).Do()
 					if err != nil {
 						return fmt.Errorf("Error adding new access_config: %s", err)
 					}
@@ -716,6 +765,7 @@ func resourceComputeInstanceDelete(d *schema.ResourceData, meta interface{}) err
 	config := meta.(*Config)
 
 	zone := d.Get("zone").(string)
+	log.Printf("[INFO] Requesting instance deletion: %s", d.Id())
 	op, err := config.clientCompute.Instances.Delete(config.Project, zone, d.Id()).Do()
 	if err != nil {
 		return fmt.Errorf("Error deleting instance: %s", err)
@@ -732,32 +782,22 @@ func resourceComputeInstanceDelete(d *schema.ResourceData, meta interface{}) err
 }
 
 func resourceInstanceMetadata(d *schema.ResourceData) *compute.Metadata {
-	var metadata *compute.Metadata
-	if metadataList := d.Get("metadata").([]interface{}); len(metadataList) > 0 {
-		m := new(compute.Metadata)
-		m.Items = make([]*compute.MetadataItems, 0, len(metadataList))
-		for _, metadataMap := range metadataList {
-			for key, val := range metadataMap.(map[string]interface{}) {
-				// TODO: fix https://github.com/hashicorp/terraform/issues/883
-				//       and remove this workaround <3 phinze
-				if key == "#" {
-					continue
-				}
-				m.Items = append(m.Items, &compute.MetadataItems{
-					Key:   key,
-					Value: val.(string),
-				})
-			}
+	m := &compute.Metadata{}
+	if mdMap := d.Get("metadata").(map[string]interface{}); len(mdMap) > 0 {
+		m.Items = make([]*compute.MetadataItems, 0, len(mdMap))
+		for key, val := range mdMap {
+			m.Items = append(m.Items, &compute.MetadataItems{
+				Key:   key,
+				Value: val.(string),
+			})
 		}
 
 		// Set the fingerprint. If the metadata has never been set before
 		// then this will just be blank.
 		m.Fingerprint = d.Get("metadata_fingerprint").(string)
-
-		metadata = m
 	}
 
-	return metadata
+	return m
 }
 
 func resourceInstanceTags(d *schema.ResourceData) *compute.Tags {

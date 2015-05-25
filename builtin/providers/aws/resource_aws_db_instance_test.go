@@ -2,11 +2,16 @@ package aws
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/goamz/rds"
+
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/aws/awserr"
+	"github.com/awslabs/aws-sdk-go/service/rds"
 )
 
 func TestAccAWSDBInstance(t *testing.T) {
@@ -23,26 +28,41 @@ func TestAccAWSDBInstance(t *testing.T) {
 					testAccCheckAWSDBInstanceExists("aws_db_instance.bar", &v),
 					testAccCheckAWSDBInstanceAttributes(&v),
 					resource.TestCheckResourceAttr(
-						"aws_db_instance.bar", "identifier", "foobarbaz-test-terraform"),
-					resource.TestCheckResourceAttr(
 						"aws_db_instance.bar", "allocated_storage", "10"),
 					resource.TestCheckResourceAttr(
 						"aws_db_instance.bar", "engine", "mysql"),
 					resource.TestCheckResourceAttr(
 						"aws_db_instance.bar", "engine_version", "5.6.21"),
 					resource.TestCheckResourceAttr(
+						"aws_db_instance.bar", "license_model", "general-public-license"),
+					resource.TestCheckResourceAttr(
 						"aws_db_instance.bar", "instance_class", "db.t1.micro"),
 					resource.TestCheckResourceAttr(
 						"aws_db_instance.bar", "name", "baz"),
 					resource.TestCheckResourceAttr(
-						// Shouldn't save password to state
-						"aws_db_instance.bar", "password", ""),
-					resource.TestCheckResourceAttr(
 						"aws_db_instance.bar", "username", "foo"),
 					resource.TestCheckResourceAttr(
-						"aws_db_instance.bar", "security_group_names.3322503515", "secfoobarbaz-test-terraform"),
-					resource.TestCheckResourceAttr(
 						"aws_db_instance.bar", "parameter_group_name", "default.mysql5.6"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSDBInstanceReplica(t *testing.T) {
+	var s, r rds.DBInstance
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSDBInstanceDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccReplicaInstanceConfig(rand.New(rand.NewSource(time.Now().UnixNano())).Int()),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSDBInstanceExists("aws_db_instance.bar", &s),
+					testAccCheckAWSDBInstanceExists("aws_db_instance.replica", &r),
+					testAccCheckAWSDBInstanceReplicaAttributes(&s, &r),
 				),
 			},
 		},
@@ -58,24 +78,25 @@ func testAccCheckAWSDBInstanceDestroy(s *terraform.State) error {
 		}
 
 		// Try to find the Group
+		var err error
 		resp, err := conn.DescribeDBInstances(
-			&rds.DescribeDBInstances{
-				DBInstanceIdentifier: rs.Primary.ID,
+			&rds.DescribeDBInstancesInput{
+				DBInstanceIdentifier: aws.String(rs.Primary.ID),
 			})
 
 		if err == nil {
 			if len(resp.DBInstances) != 0 &&
-				resp.DBInstances[0].DBInstanceIdentifier == rs.Primary.ID {
+				*resp.DBInstances[0].DBInstanceIdentifier == rs.Primary.ID {
 				return fmt.Errorf("DB Instance still exists")
 			}
 		}
 
 		// Verify the error
-		newerr, ok := err.(*rds.Error)
+		newerr, ok := err.(awserr.Error)
 		if !ok {
 			return err
 		}
-		if newerr.Code != "InvalidDBInstance.NotFound" {
+		if newerr.Code() != "InvalidDBInstance.NotFound" {
 			return err
 		}
 	}
@@ -86,16 +107,27 @@ func testAccCheckAWSDBInstanceDestroy(s *terraform.State) error {
 func testAccCheckAWSDBInstanceAttributes(v *rds.DBInstance) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 
-		if len(v.DBSecurityGroupNames) == 0 {
-			return fmt.Errorf("no sec names: %#v", v.DBSecurityGroupNames)
+		if *v.Engine != "mysql" {
+			return fmt.Errorf("bad engine: %#v", *v.Engine)
 		}
 
-		if v.Engine != "mysql" {
-			return fmt.Errorf("bad engine: %#v", v.Engine)
+		if *v.EngineVersion != "5.6.21" {
+			return fmt.Errorf("bad engine_version: %#v", *v.EngineVersion)
 		}
 
-		if v.EngineVersion != "5.6.21" {
-			return fmt.Errorf("bad engine_version: %#v", v.EngineVersion)
+		if *v.BackupRetentionPeriod != 0 {
+			return fmt.Errorf("bad backup_retention_period: %#v", *v.BackupRetentionPeriod)
+		}
+
+		return nil
+	}
+}
+
+func testAccCheckAWSDBInstanceReplicaAttributes(source, replica *rds.DBInstance) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+
+		if replica.ReadReplicaSourceDBInstanceIdentifier != nil && *replica.ReadReplicaSourceDBInstanceIdentifier != *source.DBInstanceIdentifier {
+			return fmt.Errorf("bad source identifier for replica, expected: '%s', got: '%s'", *source.DBInstanceIdentifier, *replica.ReadReplicaSourceDBInstanceIdentifier)
 		}
 
 		return nil
@@ -115,8 +147,8 @@ func testAccCheckAWSDBInstanceExists(n string, v *rds.DBInstance) resource.TestC
 
 		conn := testAccProvider.Meta().(*AWSClient).rdsconn
 
-		opts := rds.DescribeDBInstances{
-			DBInstanceIdentifier: rs.Primary.ID,
+		opts := rds.DescribeDBInstancesInput{
+			DBInstanceIdentifier: aws.String(rs.Primary.ID),
 		}
 
 		resp, err := conn.DescribeDBInstances(&opts)
@@ -126,28 +158,22 @@ func testAccCheckAWSDBInstanceExists(n string, v *rds.DBInstance) resource.TestC
 		}
 
 		if len(resp.DBInstances) != 1 ||
-			resp.DBInstances[0].DBInstanceIdentifier != rs.Primary.ID {
+			*resp.DBInstances[0].DBInstanceIdentifier != rs.Primary.ID {
 			return fmt.Errorf("DB Instance not found")
 		}
 
-		*v = resp.DBInstances[0]
+		*v = *resp.DBInstances[0]
 
 		return nil
 	}
 }
 
-const testAccAWSDBInstanceConfig = `
-resource "aws_db_security_group" "bar" {
-	name = "secfoobarbaz-test-terraform"
-	description = "just cuz"
-
-	ingress {
-		cidr = "10.0.0.1/24"
-	}
-}
-
+// Database names cannot collide, and deletion takes so long, that making the
+// name a bit random helps so able we can kill a test that's just waiting for a
+// delete and not be blocked on kicking off another one.
+var testAccAWSDBInstanceConfig = fmt.Sprintf(`
 resource "aws_db_instance" "bar" {
-	identifier = "foobarbaz-test-terraform"
+	identifier = "foobarbaz-test-terraform-%d"
 
 	allocated_storage = 10
 	engine = "mysql"
@@ -157,7 +183,42 @@ resource "aws_db_instance" "bar" {
 	password = "barbarbarbar"
 	username = "foo"
 
-	security_group_names = ["${aws_db_security_group.bar.name}"]
+	backup_retention_period = 0
+
 	parameter_group_name = "default.mysql5.6"
+}`, rand.New(rand.NewSource(time.Now().UnixNano())).Int())
+
+func testAccReplicaInstanceConfig(val int) string {
+	return fmt.Sprintf(`
+	resource "aws_db_instance" "bar" {
+		identifier = "foobarbaz-test-terraform-%d"
+
+		allocated_storage = 5
+		engine = "mysql"
+		engine_version = "5.6.21"
+		instance_class = "db.t1.micro"
+		name = "baz"
+		password = "barbarbarbar"
+		username = "foo"
+
+		backup_retention_period = 1
+
+		parameter_group_name = "default.mysql5.6"
+	}
+	
+	resource "aws_db_instance" "replica" {
+	  identifier = "tf-replica-db-%d"
+		backup_retention_period = 0
+		replicate_source_db = "${aws_db_instance.bar.identifier}"
+		allocated_storage = "${aws_db_instance.bar.allocated_storage}"
+		engine = "${aws_db_instance.bar.engine}"
+		engine_version = "${aws_db_instance.bar.engine_version}"
+		instance_class = "${aws_db_instance.bar.instance_class}"
+		password = "${aws_db_instance.bar.password}"
+		username = "${aws_db_instance.bar.username}"
+		tags {
+			Name = "tf-replica-db"
+		}
+	}
+	`, val, val)
 }
-`

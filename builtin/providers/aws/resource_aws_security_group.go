@@ -7,10 +7,12 @@ import (
 	"sort"
 	"time"
 
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/aws/awserr"
+	"github.com/awslabs/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/mitchellh/goamz/ec2"
 )
 
 func resourceAwsSecurityGroup() *schema.Resource {
@@ -23,13 +25,16 @@ func resourceAwsSecurityGroup() *schema.Resource {
 		Schema: map[string]*schema.Schema{
 			"name": &schema.Schema{
 				Type:     schema.TypeString,
-				Required: true,
+				Optional: true,
+				Computed: true,
 				ForceNew: true,
 			},
 
 			"description": &schema.Schema{
 				Type:     schema.TypeString,
-				Required: true,
+				Optional: true,
+				ForceNew: true,
+				Default:  "Managed by Terraform",
 			},
 
 			"vpc_id": &schema.Schema{
@@ -42,6 +47,7 @@ func resourceAwsSecurityGroup() *schema.Resource {
 			"ingress": &schema.Schema{
 				Type:     schema.TypeSet,
 				Optional: true,
+				Computed: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"from_port": &schema.Schema{
@@ -87,6 +93,7 @@ func resourceAwsSecurityGroup() *schema.Resource {
 			"egress": &schema.Schema{
 				Type:     schema.TypeSet,
 				Optional: true,
+				Computed: true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"from_port": &schema.Schema{
@@ -140,28 +147,35 @@ func resourceAwsSecurityGroup() *schema.Resource {
 }
 
 func resourceAwsSecurityGroupCreate(d *schema.ResourceData, meta interface{}) error {
-	ec2conn := meta.(*AWSClient).ec2conn
+	conn := meta.(*AWSClient).ec2conn
 
-	securityGroupOpts := ec2.SecurityGroup{
-		Name: d.Get("name").(string),
-	}
+	securityGroupOpts := &ec2.CreateSecurityGroupInput{}
 
-	if v := d.Get("vpc_id"); v != nil {
-		securityGroupOpts.VpcId = v.(string)
+	if v, ok := d.GetOk("vpc_id"); ok {
+		securityGroupOpts.VPCID = aws.String(v.(string))
 	}
 
 	if v := d.Get("description"); v != nil {
-		securityGroupOpts.Description = v.(string)
+		securityGroupOpts.Description = aws.String(v.(string))
 	}
 
+	var groupName string
+	if v, ok := d.GetOk("name"); ok {
+		groupName = v.(string)
+	} else {
+		groupName = resource.UniqueId()
+	}
+	securityGroupOpts.GroupName = aws.String(groupName)
+
+	var err error
 	log.Printf(
 		"[DEBUG] Security Group create configuration: %#v", securityGroupOpts)
-	createResp, err := ec2conn.CreateSecurityGroup(securityGroupOpts)
+	createResp, err := conn.CreateSecurityGroup(securityGroupOpts)
 	if err != nil {
 		return fmt.Errorf("Error creating Security Group: %s", err)
 	}
 
-	d.SetId(createResp.Id)
+	d.SetId(*createResp.GroupID)
 
 	log.Printf("[INFO] Security Group ID: %s", d.Id())
 
@@ -172,77 +186,54 @@ func resourceAwsSecurityGroupCreate(d *schema.ResourceData, meta interface{}) er
 	stateConf := &resource.StateChangeConf{
 		Pending: []string{""},
 		Target:  "exists",
-		Refresh: SGStateRefreshFunc(ec2conn, d.Id()),
+		Refresh: SGStateRefreshFunc(conn, d.Id()),
 		Timeout: 1 * time.Minute,
 	}
-	if _, err := stateConf.WaitForState(); err != nil {
+
+	resp, err := stateConf.WaitForState()
+	if err != nil {
 		return fmt.Errorf(
 			"Error waiting for Security Group (%s) to become available: %s",
 			d.Id(), err)
 	}
 
+	// AWS defaults all Security Groups to have an ALLOW ALL egress rule. Here we
+	// revoke that rule, so users don't unknowningly have/use it.
+	group := resp.(*ec2.SecurityGroup)
+	if group.VPCID != nil && *group.VPCID != "" {
+		log.Printf("[DEBUG] Revoking default egress rule for Security Group for %s", d.Id())
+
+		req := &ec2.RevokeSecurityGroupEgressInput{
+			GroupID: createResp.GroupID,
+			IPPermissions: []*ec2.IPPermission{
+				&ec2.IPPermission{
+					FromPort: aws.Long(int64(0)),
+					ToPort:   aws.Long(int64(0)),
+					IPRanges: []*ec2.IPRange{
+						&ec2.IPRange{
+							CIDRIP: aws.String("0.0.0.0/0"),
+						},
+					},
+					IPProtocol: aws.String("-1"),
+				},
+			},
+		}
+
+		if _, err = conn.RevokeSecurityGroupEgress(req); err != nil {
+			return fmt.Errorf(
+				"Error revoking default egress rule for Security Group (%s): %s",
+				d.Id(), err)
+		}
+
+	}
+
 	return resourceAwsSecurityGroupUpdate(d, meta)
 }
 
-func resourceAwsSecurityGroupIPPermGather(d *schema.ResourceData, permissions []ec2.IPPerm) []map[string]interface{} {
-	ruleMap := make(map[string]map[string]interface{})
-	for _, perm := range permissions {
-		k := fmt.Sprintf("%s-%d-%d", perm.Protocol, perm.FromPort, perm.ToPort)
-		m, ok := ruleMap[k]
-		if !ok {
-			m = make(map[string]interface{})
-			ruleMap[k] = m
-		}
-
-		m["from_port"] = perm.FromPort
-		m["to_port"] = perm.ToPort
-		m["protocol"] = perm.Protocol
-
-		if len(perm.SourceIPs) > 0 {
-			raw, ok := m["cidr_blocks"]
-			if !ok {
-				raw = make([]string, 0, len(perm.SourceIPs))
-			}
-			list := raw.([]string)
-
-			list = append(list, perm.SourceIPs...)
-			m["cidr_blocks"] = list
-		}
-
-		var groups []string
-		if len(perm.SourceGroups) > 0 {
-			groups = flattenSecurityGroups(perm.SourceGroups)
-		}
-		for i, id := range groups {
-			if id == d.Id() {
-				groups[i], groups = groups[len(groups)-1], groups[:len(groups)-1]
-				m["self"] = true
-			}
-		}
-
-		if len(groups) > 0 {
-			raw, ok := m["security_groups"]
-			if !ok {
-				raw = make([]string, 0, len(groups))
-			}
-			list := raw.([]string)
-
-			list = append(list, groups...)
-			m["security_groups"] = list
-		}
-	}
-	rules := make([]map[string]interface{}, 0, len(ruleMap))
-	for _, m := range ruleMap {
-		rules = append(rules, m)
-	}
-
-	return rules
-}
-
 func resourceAwsSecurityGroupRead(d *schema.ResourceData, meta interface{}) error {
-	ec2conn := meta.(*AWSClient).ec2conn
+	conn := meta.(*AWSClient).ec2conn
 
-	sgRaw, _, err := SGStateRefreshFunc(ec2conn, d.Id())()
+	sgRaw, _, err := SGStateRefreshFunc(conn, d.Id())()
 	if err != nil {
 		return err
 	}
@@ -251,84 +242,25 @@ func resourceAwsSecurityGroupRead(d *schema.ResourceData, meta interface{}) erro
 		return nil
 	}
 
-	sg := sgRaw.(*ec2.SecurityGroupInfo)
+	sg := sgRaw.(*ec2.SecurityGroup)
 
-	ingressRules := resourceAwsSecurityGroupIPPermGather(d, sg.IPPerms)
-	egressRules := resourceAwsSecurityGroupIPPermGather(d, sg.IPPermsEgress)
+	ingressRules := resourceAwsSecurityGroupIPPermGather(d, sg.IPPermissions)
+	egressRules := resourceAwsSecurityGroupIPPermGather(d, sg.IPPermissionsEgress)
 
 	d.Set("description", sg.Description)
-	d.Set("name", sg.Name)
-	d.Set("vpc_id", sg.VpcId)
-	d.Set("owner_id", sg.OwnerId)
+	d.Set("name", sg.GroupName)
+	d.Set("vpc_id", sg.VPCID)
+	d.Set("owner_id", sg.OwnerID)
 	d.Set("ingress", ingressRules)
 	d.Set("egress", egressRules)
 	d.Set("tags", tagsToMap(sg.Tags))
-
-	return nil
-}
-
-func resourceAwsSecurityGroupUpdateRules(d *schema.ResourceData, ruleset string, meta interface{}, group ec2.SecurityGroup) error {
-	if d.HasChange(ruleset) {
-		o, n := d.GetChange(ruleset)
-		if o == nil {
-			o = new(schema.Set)
-		}
-		if n == nil {
-			n = new(schema.Set)
-		}
-
-		os := o.(*schema.Set)
-		ns := n.(*schema.Set)
-
-		remove := expandIPPerms(d.Id(), os.Difference(ns).List())
-		add := expandIPPerms(d.Id(), ns.Difference(os).List())
-
-		// TODO: We need to handle partial state better in the in-between
-		// in this update.
-
-		// TODO: It'd be nicer to authorize before removing, but then we have
-		// to deal with complicated unrolling to get individual CIDR blocks
-		// to avoid authorizing already authorized sources. Removing before
-		// adding is easier here, and Terraform should be fast enough to
-		// not have service issues.
-
-		if len(remove) > 0 || len(add) > 0 {
-
-			ec2conn := meta.(*AWSClient).ec2conn
-
-			if len(remove) > 0 {
-				// Revoke the old rules
-				revoke := ec2conn.RevokeSecurityGroup
-				if ruleset == "egress" {
-					revoke = ec2conn.RevokeSecurityGroupEgress
-				}
-				_, err := revoke(group, remove)
-				if err != nil {
-					return fmt.Errorf("Error revoking security group %s rules: %s", ruleset, err)
-				}
-			}
-
-			if len(add) > 0 {
-				// Authorize the new rules
-				authorize := ec2conn.AuthorizeSecurityGroup
-				if ruleset == "egress" {
-					authorize = ec2conn.AuthorizeSecurityGroupEgress
-				}
-				_, err := authorize(group, add)
-				if err != nil {
-					return fmt.Errorf("Error authorizing security group %s rules: %s", ruleset, err)
-				}
-			}
-		}
-	}
-
 	return nil
 }
 
 func resourceAwsSecurityGroupUpdate(d *schema.ResourceData, meta interface{}) error {
-	ec2conn := meta.(*AWSClient).ec2conn
+	conn := meta.(*AWSClient).ec2conn
 
-	sgRaw, _, err := SGStateRefreshFunc(ec2conn, d.Id())()
+	sgRaw, _, err := SGStateRefreshFunc(conn, d.Id())()
 	if err != nil {
 		return err
 	}
@@ -336,7 +268,8 @@ func resourceAwsSecurityGroupUpdate(d *schema.ResourceData, meta interface{}) er
 		d.SetId("")
 		return nil
 	}
-	group := sgRaw.(*ec2.SecurityGroupInfo).SecurityGroup
+
+	group := sgRaw.(*ec2.SecurityGroup)
 
 	err = resourceAwsSecurityGroupUpdateRules(d, "ingress", meta, group)
 	if err != nil {
@@ -350,7 +283,7 @@ func resourceAwsSecurityGroupUpdate(d *schema.ResourceData, meta interface{}) er
 		}
 	}
 
-	if err := setTags(ec2conn, d); err != nil {
+	if err := setTags(conn, d); err != nil {
 		return err
 	}
 
@@ -360,19 +293,21 @@ func resourceAwsSecurityGroupUpdate(d *schema.ResourceData, meta interface{}) er
 }
 
 func resourceAwsSecurityGroupDelete(d *schema.ResourceData, meta interface{}) error {
-	ec2conn := meta.(*AWSClient).ec2conn
+	conn := meta.(*AWSClient).ec2conn
 
 	log.Printf("[DEBUG] Security Group destroy: %v", d.Id())
 
 	return resource.Retry(5*time.Minute, func() error {
-		_, err := ec2conn.DeleteSecurityGroup(ec2.SecurityGroup{Id: d.Id()})
+		_, err := conn.DeleteSecurityGroup(&ec2.DeleteSecurityGroupInput{
+			GroupID: aws.String(d.Id()),
+		})
 		if err != nil {
-			ec2err, ok := err.(*ec2.Error)
+			ec2err, ok := err.(awserr.Error)
 			if !ok {
 				return err
 			}
 
-			switch ec2err.Code {
+			switch ec2err.Code() {
 			case "InvalidGroup.NotFound":
 				return nil
 			case "DependencyViolation":
@@ -380,7 +315,7 @@ func resourceAwsSecurityGroupDelete(d *schema.ResourceData, meta interface{}) er
 				return err
 			default:
 				// Any other error, we want to quit the retry loop immediately
-				return resource.RetryError{err}
+				return resource.RetryError{Err: err}
 			}
 		}
 
@@ -394,6 +329,7 @@ func resourceAwsSecurityGroupRuleHash(v interface{}) int {
 	buf.WriteString(fmt.Sprintf("%d-", m["from_port"].(int)))
 	buf.WriteString(fmt.Sprintf("%d-", m["to_port"].(int)))
 	buf.WriteString(fmt.Sprintf("%s-", m["protocol"].(string)))
+	buf.WriteString(fmt.Sprintf("%t-", m["self"].(bool)))
 
 	// We need to make sure to sort the strings below so that we always
 	// generate the same hash code no matter what is in the set.
@@ -425,16 +361,180 @@ func resourceAwsSecurityGroupRuleHash(v interface{}) int {
 	return hashcode.String(buf.String())
 }
 
+func resourceAwsSecurityGroupIPPermGather(d *schema.ResourceData, permissions []*ec2.IPPermission) []map[string]interface{} {
+	ruleMap := make(map[string]map[string]interface{})
+	for _, perm := range permissions {
+		var fromPort, toPort int64
+		if v := perm.FromPort; v != nil {
+			fromPort = *v
+		}
+		if v := perm.ToPort; v != nil {
+			toPort = *v
+		}
+
+		k := fmt.Sprintf("%s-%d-%d", *perm.IPProtocol, fromPort, toPort)
+		m, ok := ruleMap[k]
+		if !ok {
+			m = make(map[string]interface{})
+			ruleMap[k] = m
+		}
+
+		m["from_port"] = fromPort
+		m["to_port"] = toPort
+		m["protocol"] = *perm.IPProtocol
+
+		if len(perm.IPRanges) > 0 {
+			raw, ok := m["cidr_blocks"]
+			if !ok {
+				raw = make([]string, 0, len(perm.IPRanges))
+			}
+			list := raw.([]string)
+
+			for _, ip := range perm.IPRanges {
+				list = append(list, *ip.CIDRIP)
+			}
+
+			m["cidr_blocks"] = list
+		}
+
+		var groups []string
+		if len(perm.UserIDGroupPairs) > 0 {
+			groups = flattenSecurityGroups(perm.UserIDGroupPairs)
+		}
+		for i, id := range groups {
+			if id == d.Id() {
+				groups[i], groups = groups[len(groups)-1], groups[:len(groups)-1]
+				m["self"] = true
+			}
+		}
+
+		if len(groups) > 0 {
+			raw, ok := m["security_groups"]
+			if !ok {
+				raw = make([]string, 0, len(groups))
+			}
+			list := raw.([]string)
+
+			list = append(list, groups...)
+			m["security_groups"] = list
+		}
+	}
+	rules := make([]map[string]interface{}, 0, len(ruleMap))
+	for _, m := range ruleMap {
+		rules = append(rules, m)
+	}
+	return rules
+}
+
+func resourceAwsSecurityGroupUpdateRules(
+	d *schema.ResourceData, ruleset string,
+	meta interface{}, group *ec2.SecurityGroup) error {
+
+	if d.HasChange(ruleset) {
+		o, n := d.GetChange(ruleset)
+		if o == nil {
+			o = new(schema.Set)
+		}
+		if n == nil {
+			n = new(schema.Set)
+		}
+
+		os := o.(*schema.Set)
+		ns := n.(*schema.Set)
+
+		remove, err := expandIPPerms(group, os.Difference(ns).List())
+		if err != nil {
+			return err
+		}
+		add, err := expandIPPerms(group, ns.Difference(os).List())
+		if err != nil {
+			return err
+		}
+
+		// TODO: We need to handle partial state better in the in-between
+		// in this update.
+
+		// TODO: It'd be nicer to authorize before removing, but then we have
+		// to deal with complicated unrolling to get individual CIDR blocks
+		// to avoid authorizing already authorized sources. Removing before
+		// adding is easier here, and Terraform should be fast enough to
+		// not have service issues.
+
+		if len(remove) > 0 || len(add) > 0 {
+			conn := meta.(*AWSClient).ec2conn
+
+			var err error
+			if len(remove) > 0 {
+				log.Printf("[DEBUG] Revoking security group %#v %s rule: %#v",
+					group, ruleset, remove)
+
+				if ruleset == "egress" {
+					req := &ec2.RevokeSecurityGroupEgressInput{
+						GroupID:       group.GroupID,
+						IPPermissions: remove,
+					}
+					_, err = conn.RevokeSecurityGroupEgress(req)
+				} else {
+					req := &ec2.RevokeSecurityGroupIngressInput{
+						GroupID:       group.GroupID,
+						IPPermissions: remove,
+					}
+					_, err = conn.RevokeSecurityGroupIngress(req)
+				}
+
+				if err != nil {
+					return fmt.Errorf(
+						"Error authorizing security group %s rules: %s",
+						ruleset, err)
+				}
+			}
+
+			if len(add) > 0 {
+				log.Printf("[DEBUG] Authorizing security group %#v %s rule: %#v",
+					group, ruleset, add)
+				// Authorize the new rules
+				if ruleset == "egress" {
+					req := &ec2.AuthorizeSecurityGroupEgressInput{
+						GroupID:       group.GroupID,
+						IPPermissions: add,
+					}
+					_, err = conn.AuthorizeSecurityGroupEgress(req)
+				} else {
+					req := &ec2.AuthorizeSecurityGroupIngressInput{
+						GroupID:       group.GroupID,
+						IPPermissions: add,
+					}
+					if group.VPCID == nil || *group.VPCID == "" {
+						req.GroupID = nil
+						req.GroupName = group.GroupName
+					}
+
+					_, err = conn.AuthorizeSecurityGroupIngress(req)
+				}
+
+				if err != nil {
+					return fmt.Errorf(
+						"Error authorizing security group %s rules: %s",
+						ruleset, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // SGStateRefreshFunc returns a resource.StateRefreshFunc that is used to watch
 // a security group.
 func SGStateRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
 	return func() (interface{}, string, error) {
-		sgs := []ec2.SecurityGroup{ec2.SecurityGroup{Id: id}}
-		resp, err := conn.SecurityGroups(sgs, nil)
+		req := &ec2.DescribeSecurityGroupsInput{
+			GroupIDs: []*string{aws.String(id)},
+		}
+		resp, err := conn.DescribeSecurityGroups(req)
 		if err != nil {
-			if ec2err, ok := err.(*ec2.Error); ok {
-				if ec2err.Code == "InvalidSecurityGroupID.NotFound" ||
-					ec2err.Code == "InvalidGroup.NotFound" {
+			if ec2err, ok := err.(awserr.Error); ok {
+				if ec2err.Code() == "InvalidSecurityGroupID.NotFound" ||
+					ec2err.Code() == "InvalidGroup.NotFound" {
 					resp = nil
 					err = nil
 				}
@@ -450,7 +550,7 @@ func SGStateRefreshFunc(conn *ec2.EC2, id string) resource.StateRefreshFunc {
 			return nil, "", nil
 		}
 
-		group := &resp.Groups[0]
+		group := resp.SecurityGroups[0]
 		return group, "exists", nil
 	}
 }

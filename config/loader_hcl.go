@@ -17,6 +17,7 @@ type hclConfigurable struct {
 
 func (t *hclConfigurable) Config() (*Config, error) {
 	validKeys := map[string]struct{}{
+		"atlas":    struct{}{},
 		"module":   struct{}{},
 		"output":   struct{}{},
 		"provider": struct{}{},
@@ -67,6 +68,15 @@ func (t *hclConfigurable) Config() (*Config, error) {
 			}
 
 			config.Variables = append(config.Variables, newVar)
+		}
+	}
+
+	// Get Atlas configuration
+	if atlas := t.Object.Get("atlas", false); atlas != nil {
+		var err error
+		config.Atlas, err = loadAtlasHcl(atlas)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -187,6 +197,19 @@ func loadFileHcl(root string) (configurable, []string, error) {
 	return result, nil, nil
 }
 
+// Given a handle to a HCL object, this transforms it into the Atlas
+// configuration.
+func loadAtlasHcl(obj *hclobj.Object) (*AtlasConfig, error) {
+	var config AtlasConfig
+	if err := hcl.DecodeObject(&config, obj); err != nil {
+		return nil, fmt.Errorf(
+			"Error reading atlas config: %s",
+			err)
+	}
+
+	return &config, nil
+}
+
 // Given a handle to a HCL object, this recurses into the structure
 // and pulls out a list of modules.
 //
@@ -302,13 +325,13 @@ func loadOutputsHcl(os *hclobj.Object) ([]*Output, error) {
 // LoadProvidersHcl recurses into the given HCL object and turns
 // it into a mapping of provider configs.
 func loadProvidersHcl(os *hclobj.Object) ([]*ProviderConfig, error) {
-	objects := make(map[string]*hclobj.Object)
+	var objects []*hclobj.Object
 
 	// Iterate over all the "provider" blocks and get the keys along with
 	// their raw configuration objects. We'll parse those later.
 	for _, o1 := range os.Elem(false) {
 		for _, o2 := range o1.Elem(true) {
-			objects[o2.Key] = o2
+			objects = append(objects, o2)
 		}
 	}
 
@@ -318,23 +341,38 @@ func loadProvidersHcl(os *hclobj.Object) ([]*ProviderConfig, error) {
 
 	// Go through each object and turn it into an actual result.
 	result := make([]*ProviderConfig, 0, len(objects))
-	for n, o := range objects {
+	for _, o := range objects {
 		var config map[string]interface{}
 
 		if err := hcl.DecodeObject(&config, o); err != nil {
 			return nil, err
 		}
 
+		delete(config, "alias")
+
 		rawConfig, err := NewRawConfig(config)
 		if err != nil {
 			return nil, fmt.Errorf(
 				"Error reading config for provider config %s: %s",
-				n,
+				o.Key,
 				err)
 		}
 
+		// If we have an alias field, then add those in
+		var alias string
+		if a := o.Get("alias", false); a != nil {
+			err := hcl.DecodeObject(&alias, a)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"Error reading alias for provider[%s]: %s",
+					o.Key,
+					err)
+			}
+		}
+
 		result = append(result, &ProviderConfig{
-			Name:      n,
+			Name:      o.Key,
+			Alias:     alias,
 			RawConfig: rawConfig,
 		})
 	}
@@ -394,6 +432,7 @@ func loadResourcesHcl(os *hclobj.Object) ([]*Resource, error) {
 			delete(config, "count")
 			delete(config, "depends_on")
 			delete(config, "provisioner")
+			delete(config, "provider")
 			delete(config, "lifecycle")
 
 			rawConfig, err := NewRawConfig(config)
@@ -465,6 +504,19 @@ func loadResourcesHcl(os *hclobj.Object) ([]*Resource, error) {
 				}
 			}
 
+			// If we have a provider, then parse it out
+			var provider string
+			if o := obj.Get("provider", false); o != nil {
+				err := hcl.DecodeObject(&provider, o)
+				if err != nil {
+					return nil, fmt.Errorf(
+						"Error reading provider for %s[%s]: %s",
+						t.Key,
+						k,
+						err)
+				}
+			}
+
 			// Check if the resource should be re-created before
 			// destroying the existing instance
 			var lifecycle ResourceLifecycle
@@ -485,6 +537,7 @@ func loadResourcesHcl(os *hclobj.Object) ([]*Resource, error) {
 				RawCount:     countConfig,
 				RawConfig:    rawConfig,
 				Provisioners: provisioners,
+				Provider:     provider,
 				DependsOn:    dependsOn,
 				Lifecycle:    lifecycle,
 			})

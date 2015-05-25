@@ -68,7 +68,8 @@ func (c *ApplyCommand) Run(args []string) int {
 
 	// Prepare the extra hooks to count resources
 	countHook := new(CountHook)
-	c.Meta.extraHooks = []terraform.Hook{countHook}
+	stateHook := new(StateHook)
+	c.Meta.extraHooks = []terraform.Hook{countHook, stateHook}
 
 	if !c.Destroy && maybeInit {
 		// Do a detect to determine if we need to do an init + apply.
@@ -92,6 +93,7 @@ func (c *ApplyCommand) Run(args []string) int {
 
 	// Build the context based on the arguments given
 	ctx, planned, err := c.Context(contextOpts{
+		Destroy:   c.Destroy,
 		Path:      configPath,
 		StatePath: c.Meta.statePath,
 	})
@@ -139,16 +141,23 @@ func (c *ApplyCommand) Run(args []string) int {
 			}
 		}
 
-		var opts terraform.PlanOpts
-		if c.Destroy {
-			opts.Destroy = true
-		}
-
-		if _, err := ctx.Plan(&opts); err != nil {
+		if _, err := ctx.Plan(); err != nil {
 			c.Ui.Error(fmt.Sprintf(
 				"Error creating plan: %s", err))
 			return 1
 		}
+	}
+
+	// Setup the state hook for continous state updates
+	{
+		state, err := c.State()
+		if err != nil {
+			c.Ui.Error(fmt.Sprintf(
+				"Error reading state: %s", err))
+			return 1
+		}
+
+		stateHook.State = state
 	}
 
 	// Start the apply in a goroutine so that we can be interrupted.
@@ -306,6 +315,10 @@ Options:
                          "-state". This can be used to preserve the old
                          state.
 
+  -target=resource       Resource to target. Operation will be limited to this
+                         resource and its dependencies. This flag can be used
+                         multiple times.
+
   -var 'foo=bar'         Set a variable in the Terraform configuration. This
                          flag can be set multiple times.
 
@@ -343,6 +356,10 @@ Options:
   -state-out=path        Path to write state to that is different than
                          "-state". This can be used to preserve the old
                          state.
+
+  -target=resource       Resource to target. Operation will be limited to this
+                         resource and its dependencies. This flag can be used
+                         multiple times.
 
   -var 'foo=bar'         Set a variable in the Terraform configuration. This
                          flag can be set multiple times.

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"code.google.com/p/google-api-go-client/compute/v1"
-	"code.google.com/p/google-api-go-client/googleapi"
 	"github.com/hashicorp/terraform/helper/schema"
+	"google.golang.org/api/compute/v1"
+	"google.golang.org/api/googleapi"
 )
 
 func resourceComputeTargetPool() *schema.Resource {
@@ -72,11 +72,11 @@ func resourceComputeTargetPool() *schema.Resource {
 }
 
 func convertStringArr(ifaceArr []interface{}) []string {
-    arr := make([]string, len(ifaceArr))
-    for i, v := range ifaceArr {
-        arr[i] = v.(string)
-    }
-    return arr
+	arr := make([]string, len(ifaceArr))
+	for i, v := range ifaceArr {
+		arr[i] = v.(string)
+	}
+	return arr
 }
 
 func waitOp(config *Config, op *compute.Operation,
@@ -151,11 +151,11 @@ func resourceComputeTargetPoolCreate(d *schema.ResourceData, meta interface{}) e
 
 	// Build the parameter
 	tpool := &compute.TargetPool{
-		BackupPool: d.Get("backup_pool").(string),
-		Description: d.Get("description").(string),
-		HealthChecks: hchkUrls,
-		Instances:  instanceUrls,
-		Name: d.Get("name").(string),
+		BackupPool:      d.Get("backup_pool").(string),
+		Description:     d.Get("description").(string),
+		HealthChecks:    hchkUrls,
+		Instances:       instanceUrls,
+		Name:            d.Get("name").(string),
 		SessionAffinity: d.Get("session_affinity").(string),
 	}
 	if d.Get("failover_ratio") != nil {
@@ -214,7 +214,6 @@ func calcAddRemove(from []string, to []string) ([]string, []string) {
 	}
 	return add, remove
 }
-
 
 func resourceComputeTargetPoolUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*Config)

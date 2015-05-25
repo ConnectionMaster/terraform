@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/aws/awserr"
+	"github.com/awslabs/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/goamz/ec2"
 )
 
-func TestAccAWSInternetGateway(t *testing.T) {
+func TestAccAWSInternetGateway_basic(t *testing.T) {
 	var v, v2 ec2.InternetGateway
 
 	testNotEqual := func(*terraform.State) error {
@@ -20,8 +22,8 @@ func TestAccAWSInternetGateway(t *testing.T) {
 			return fmt.Errorf("IG B is not attached")
 		}
 
-		id1 := v.Attachments[0].VpcId
-		id2 := v2.Attachments[0].VpcId
+		id1 := v.Attachments[0].VPCID
+		id2 := v2.Attachments[0].VPCID
 		if id1 == id2 {
 			return fmt.Errorf("Both attachment IDs are the same")
 		}
@@ -85,7 +87,7 @@ func TestAccAWSInternetGateway_delete(t *testing.T) {
 	})
 }
 
-func TestAccInternetGateway_tags(t *testing.T) {
+func TestAccAWSInternetGateway_tags(t *testing.T) {
 	var v ec2.InternetGateway
 
 	resource.Test(t, resource.TestCase{
@@ -97,6 +99,7 @@ func TestAccInternetGateway_tags(t *testing.T) {
 				Config: testAccCheckInternetGatewayConfigTags,
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckInternetGatewayExists("aws_internet_gateway.foo", &v),
+					testAccCheckTags(&v.Tags, "foo", "bar"),
 				),
 			},
 
@@ -121,8 +124,9 @@ func testAccCheckInternetGatewayDestroy(s *terraform.State) error {
 		}
 
 		// Try to find the resource
-		resp, err := conn.DescribeInternetGateways(
-			[]string{rs.Primary.ID}, ec2.NewFilter())
+		resp, err := conn.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+			InternetGatewayIDs: []*string{aws.String(rs.Primary.ID)},
+		})
 		if err == nil {
 			if len(resp.InternetGateways) > 0 {
 				return fmt.Errorf("still exists")
@@ -132,11 +136,11 @@ func testAccCheckInternetGatewayDestroy(s *terraform.State) error {
 		}
 
 		// Verify the error is what we want
-		ec2err, ok := err.(*ec2.Error)
+		ec2err, ok := err.(awserr.Error)
 		if !ok {
 			return err
 		}
-		if ec2err.Code != "InvalidInternetGatewayID.NotFound" {
+		if ec2err.Code() != "InvalidInternetGatewayID.NotFound" {
 			return err
 		}
 	}
@@ -156,8 +160,9 @@ func testAccCheckInternetGatewayExists(n string, ig *ec2.InternetGateway) resour
 		}
 
 		conn := testAccProvider.Meta().(*AWSClient).ec2conn
-		resp, err := conn.DescribeInternetGateways(
-			[]string{rs.Primary.ID}, ec2.NewFilter())
+		resp, err := conn.DescribeInternetGateways(&ec2.DescribeInternetGatewaysInput{
+			InternetGatewayIDs: []*string{aws.String(rs.Primary.ID)},
+		})
 		if err != nil {
 			return err
 		}
@@ -165,7 +170,7 @@ func testAccCheckInternetGatewayExists(n string, ig *ec2.InternetGateway) resour
 			return fmt.Errorf("InternetGateway not found")
 		}
 
-		*ig = resp.InternetGateways[0]
+		*ig = *resp.InternetGateways[0]
 
 		return nil
 	}

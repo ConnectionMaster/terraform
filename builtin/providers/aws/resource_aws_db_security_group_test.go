@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/aws/awserr"
+	"github.com/awslabs/aws-sdk-go/service/rds"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/goamz/rds"
 )
 
 func TestAccAWSDBSecurityGroup(t *testing.T) {
@@ -27,7 +29,7 @@ func TestAccAWSDBSecurityGroup(t *testing.T) {
 					resource.TestCheckResourceAttr(
 						"aws_db_security_group.bar", "description", "just cuz"),
 					resource.TestCheckResourceAttr(
-						"aws_db_security_group.bar", "ingress.0.cidr", "10.0.0.1/24"),
+						"aws_db_security_group.bar", "ingress.3363517775.cidr", "10.0.0.1/24"),
 					resource.TestCheckResourceAttr(
 						"aws_db_security_group.bar", "ingress.#", "1"),
 				),
@@ -46,23 +48,23 @@ func testAccCheckAWSDBSecurityGroupDestroy(s *terraform.State) error {
 
 		// Try to find the Group
 		resp, err := conn.DescribeDBSecurityGroups(
-			&rds.DescribeDBSecurityGroups{
-				DBSecurityGroupName: rs.Primary.ID,
+			&rds.DescribeDBSecurityGroupsInput{
+				DBSecurityGroupName: aws.String(rs.Primary.ID),
 			})
 
 		if err == nil {
 			if len(resp.DBSecurityGroups) != 0 &&
-				resp.DBSecurityGroups[0].Name == rs.Primary.ID {
+				*resp.DBSecurityGroups[0].DBSecurityGroupName == rs.Primary.ID {
 				return fmt.Errorf("DB Security Group still exists")
 			}
 		}
 
 		// Verify the error
-		newerr, ok := err.(*rds.Error)
+		newerr, ok := err.(awserr.Error)
 		if !ok {
 			return err
 		}
-		if newerr.Code != "InvalidDBSecurityGroup.NotFound" {
+		if newerr.Code() != "InvalidDBSecurityGroup.NotFound" {
 			return err
 		}
 	}
@@ -72,24 +74,29 @@ func testAccCheckAWSDBSecurityGroupDestroy(s *terraform.State) error {
 
 func testAccCheckAWSDBSecurityGroupAttributes(group *rds.DBSecurityGroup) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		if len(group.CidrIps) == 0 {
-			return fmt.Errorf("no cidr: %#v", group.CidrIps)
+		if len(group.IPRanges) == 0 {
+			return fmt.Errorf("no cidr: %#v", group.IPRanges)
 		}
 
-		if group.CidrIps[0] != "10.0.0.1/24" {
-			return fmt.Errorf("bad cidr: %#v", group.CidrIps)
+		if *group.IPRanges[0].CIDRIP != "10.0.0.1/24" {
+			return fmt.Errorf("bad cidr: %#v", group.IPRanges)
 		}
 
-		if group.CidrStatuses[0] != "authorized" {
-			return fmt.Errorf("bad status: %#v", group.CidrStatuses)
+		statuses := make([]string, 0, len(group.IPRanges))
+		for _, ips := range group.IPRanges {
+			statuses = append(statuses, *ips.Status)
 		}
 
-		if group.Name != "secgroup-terraform" {
-			return fmt.Errorf("bad name: %#v", group.Name)
+		if statuses[0] != "authorized" {
+			return fmt.Errorf("bad status: %#v", statuses)
 		}
 
-		if group.Description != "just cuz" {
-			return fmt.Errorf("bad description: %#v", group.Description)
+		if *group.DBSecurityGroupName != "secgroup-terraform" {
+			return fmt.Errorf("bad name: %#v", *group.DBSecurityGroupName)
+		}
+
+		if *group.DBSecurityGroupDescription != "just cuz" {
+			return fmt.Errorf("bad description: %#v", *group.DBSecurityGroupDescription)
 		}
 
 		return nil
@@ -109,8 +116,8 @@ func testAccCheckAWSDBSecurityGroupExists(n string, v *rds.DBSecurityGroup) reso
 
 		conn := testAccProvider.Meta().(*AWSClient).rdsconn
 
-		opts := rds.DescribeDBSecurityGroups{
-			DBSecurityGroupName: rs.Primary.ID,
+		opts := rds.DescribeDBSecurityGroupsInput{
+			DBSecurityGroupName: aws.String(rs.Primary.ID),
 		}
 
 		resp, err := conn.DescribeDBSecurityGroups(&opts)
@@ -120,17 +127,21 @@ func testAccCheckAWSDBSecurityGroupExists(n string, v *rds.DBSecurityGroup) reso
 		}
 
 		if len(resp.DBSecurityGroups) != 1 ||
-			resp.DBSecurityGroups[0].Name != rs.Primary.ID {
+			*resp.DBSecurityGroups[0].DBSecurityGroupName != rs.Primary.ID {
 			return fmt.Errorf("DB Security Group not found")
 		}
 
-		*v = resp.DBSecurityGroups[0]
+		*v = *resp.DBSecurityGroups[0]
 
 		return nil
 	}
 }
 
 const testAccAWSDBSecurityGroupConfig = `
+provider "aws" {
+        region = "us-east-1"
+}
+
 resource "aws_db_security_group" "bar" {
     name = "secgroup-terraform"
     description = "just cuz"

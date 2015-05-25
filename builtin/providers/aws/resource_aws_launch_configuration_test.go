@@ -2,14 +2,19 @@ package aws
 
 import (
 	"fmt"
+	"math/rand"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/aws/awserr"
+	"github.com/awslabs/aws-sdk-go/service/autoscaling"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/goamz/autoscaling"
 )
 
-func TestAccAWSLaunchConfiguration(t *testing.T) {
+func TestAccAWSLaunchConfiguration_withBlockDevices(t *testing.T) {
 	var conf autoscaling.LaunchConfiguration
 
 	resource.Test(t, resource.TestCase{
@@ -25,27 +30,73 @@ func TestAccAWSLaunchConfiguration(t *testing.T) {
 					resource.TestCheckResourceAttr(
 						"aws_launch_configuration.bar", "image_id", "ami-21f78e11"),
 					resource.TestCheckResourceAttr(
-						"aws_launch_configuration.bar", "name", "foobar-terraform-test"),
-					resource.TestCheckResourceAttr(
-						"aws_launch_configuration.bar", "instance_type", "t1.micro"),
+						"aws_launch_configuration.bar", "instance_type", "m1.small"),
 					resource.TestCheckResourceAttr(
 						"aws_launch_configuration.bar", "associate_public_ip_address", "true"),
 					resource.TestCheckResourceAttr(
 						"aws_launch_configuration.bar", "spot_price", ""),
 				),
 			},
+		},
+	})
+}
 
+func TestAccAWSLaunchConfiguration_withSpotPrice(t *testing.T) {
+	var conf autoscaling.LaunchConfiguration
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSLaunchConfigurationDestroy,
+		Steps: []resource.TestStep{
 			resource.TestStep{
-				Config: TestAccAWSLaunchConfigurationWithSpotPriceConfig,
+				Config: testAccAWSLaunchConfigurationWithSpotPriceConfig,
 				Check: resource.ComposeTestCheckFunc(
 					testAccCheckAWSLaunchConfigurationExists("aws_launch_configuration.bar", &conf),
-					testAccCheckAWSLaunchConfigurationAttributes(&conf),
 					resource.TestCheckResourceAttr(
 						"aws_launch_configuration.bar", "spot_price", "0.01"),
 				),
 			},
 		},
 	})
+}
+
+func TestAccAWSLaunchConfiguration_withGeneratedName(t *testing.T) {
+	var conf autoscaling.LaunchConfiguration
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSLaunchConfigurationDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccAWSLaunchConfigurationNoNameConfig,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSLaunchConfigurationExists("aws_launch_configuration.bar", &conf),
+					testAccCheckAWSLaunchConfigurationGeneratedNamePrefix(
+						"aws_launch_configuration.bar", "terraform-"),
+				),
+			},
+		},
+	})
+}
+
+func testAccCheckAWSLaunchConfigurationGeneratedNamePrefix(
+	resource, prefix string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		r, ok := s.RootModule().Resources[resource]
+		if !ok {
+			return fmt.Errorf("Resource not found")
+		}
+		name, ok := r.Primary.Attributes["name"]
+		if !ok {
+			return fmt.Errorf("Name attr not found: %#v", r.Primary.Attributes)
+		}
+		if !strings.HasPrefix(name, prefix) {
+			return fmt.Errorf("Name: %q, does not have prefix: %q", name, prefix)
+		}
+		return nil
+	}
 }
 
 func testAccCheckAWSLaunchConfigurationDestroy(s *terraform.State) error {
@@ -57,23 +108,23 @@ func testAccCheckAWSLaunchConfigurationDestroy(s *terraform.State) error {
 		}
 
 		describe, err := conn.DescribeLaunchConfigurations(
-			&autoscaling.DescribeLaunchConfigurations{
-				Names: []string{rs.Primary.ID},
+			&autoscaling.DescribeLaunchConfigurationsInput{
+				LaunchConfigurationNames: []*string{aws.String(rs.Primary.ID)},
 			})
 
 		if err == nil {
 			if len(describe.LaunchConfigurations) != 0 &&
-				describe.LaunchConfigurations[0].Name == rs.Primary.ID {
+				*describe.LaunchConfigurations[0].LaunchConfigurationName == rs.Primary.ID {
 				return fmt.Errorf("Launch Configuration still exists")
 			}
 		}
 
 		// Verify the error
-		providerErr, ok := err.(*autoscaling.Error)
+		providerErr, ok := err.(awserr.Error)
 		if !ok {
 			return err
 		}
-		if providerErr.Code != "InvalidLaunchConfiguration.NotFound" {
+		if providerErr.Code() != "InvalidLaunchConfiguration.NotFound" {
 			return err
 		}
 	}
@@ -83,16 +134,42 @@ func testAccCheckAWSLaunchConfigurationDestroy(s *terraform.State) error {
 
 func testAccCheckAWSLaunchConfigurationAttributes(conf *autoscaling.LaunchConfiguration) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		if conf.ImageId != "ami-21f78e11" {
-			return fmt.Errorf("Bad image_id: %s", conf.ImageId)
+		if *conf.ImageID != "ami-21f78e11" {
+			return fmt.Errorf("Bad image_id: %s", *conf.ImageID)
 		}
 
-		if conf.Name != "foobar-terraform-test" {
-			return fmt.Errorf("Bad name: %s", conf.Name)
+		if !strings.HasPrefix(*conf.LaunchConfigurationName, "terraform-") {
+			return fmt.Errorf("Bad name: %s", *conf.LaunchConfigurationName)
 		}
 
-		if conf.InstanceType != "t1.micro" {
-			return fmt.Errorf("Bad instance_type: %s", conf.InstanceType)
+		if *conf.InstanceType != "m1.small" {
+			return fmt.Errorf("Bad instance_type: %s", *conf.InstanceType)
+		}
+
+		// Map out the block devices by name, which should be unique.
+		blockDevices := make(map[string]*autoscaling.BlockDeviceMapping)
+		for _, blockDevice := range conf.BlockDeviceMappings {
+			blockDevices[*blockDevice.DeviceName] = blockDevice
+		}
+
+		// Check if the root block device exists.
+		if _, ok := blockDevices["/dev/sda1"]; !ok {
+			fmt.Errorf("block device doesn't exist: /dev/sda1")
+		}
+
+		// Check if the secondary block device exists.
+		if _, ok := blockDevices["/dev/sdb"]; !ok {
+			fmt.Errorf("block device doesn't exist: /dev/sdb")
+		}
+
+		// Check if the third block device exists.
+		if _, ok := blockDevices["/dev/sdc"]; !ok {
+			fmt.Errorf("block device doesn't exist: /dev/sdc")
+		}
+
+		// Check if the secondary block device exists.
+		if _, ok := blockDevices["/dev/sdb"]; !ok {
+			return fmt.Errorf("block device doesn't exist: /dev/sdb")
 		}
 
 		return nil
@@ -112,8 +189,8 @@ func testAccCheckAWSLaunchConfigurationExists(n string, res *autoscaling.LaunchC
 
 		conn := testAccProvider.Meta().(*AWSClient).autoscalingconn
 
-		describeOpts := autoscaling.DescribeLaunchConfigurations{
-			Names: []string{rs.Primary.ID},
+		describeOpts := autoscaling.DescribeLaunchConfigurationsInput{
+			LaunchConfigurationNames: []*string{aws.String(rs.Primary.ID)},
 		}
 		describe, err := conn.DescribeLaunchConfigurations(&describeOpts)
 
@@ -122,33 +199,59 @@ func testAccCheckAWSLaunchConfigurationExists(n string, res *autoscaling.LaunchC
 		}
 
 		if len(describe.LaunchConfigurations) != 1 ||
-			describe.LaunchConfigurations[0].Name != rs.Primary.ID {
+			*describe.LaunchConfigurations[0].LaunchConfigurationName != rs.Primary.ID {
 			return fmt.Errorf("Launch Configuration Group not found")
 		}
 
-		*res = describe.LaunchConfigurations[0]
+		*res = *describe.LaunchConfigurations[0]
 
 		return nil
 	}
 }
 
-const testAccAWSLaunchConfigurationConfig = `
+var testAccAWSLaunchConfigurationConfig = fmt.Sprintf(`
 resource "aws_launch_configuration" "bar" {
-  name = "foobar-terraform-test"
+  name = "terraform-test-%d"
   image_id = "ami-21f78e11"
-  instance_type = "t1.micro"
+  instance_type = "m1.small"
   user_data = "foobar-user-data"
   associate_public_ip_address = true
-}
-`
 
-const TestAccAWSLaunchConfigurationWithSpotPriceConfig = `
+	root_block_device {
+		volume_type = "gp2"
+		volume_size = 11
+	}
+	ebs_block_device {
+		device_name = "/dev/sdb"
+		volume_size = 9
+	}
+	ebs_block_device {
+		device_name = "/dev/sdc"
+		volume_size = 10
+		volume_type = "io1"
+		iops = 100
+	}
+	ephemeral_block_device {
+		device_name = "/dev/sde"
+		virtual_name = "ephemeral0"
+	}
+}
+`, rand.New(rand.NewSource(time.Now().UnixNano())).Int())
+
+var testAccAWSLaunchConfigurationWithSpotPriceConfig = fmt.Sprintf(`
 resource "aws_launch_configuration" "bar" {
-  name = "foobar-terraform-test"
+  name = "terraform-test-%d"
   image_id = "ami-21f78e11"
   instance_type = "t1.micro"
-  user_data = "foobar-user-data"
-  associate_public_ip_address = true
   spot_price = "0.01"
+}
+`, rand.New(rand.NewSource(time.Now().UnixNano())).Int())
+
+const testAccAWSLaunchConfigurationNoNameConfig = `
+resource "aws_launch_configuration" "bar" {
+   image_id = "ami-21f78e11"
+   instance_type = "t1.micro"
+   user_data = "foobar-user-data-change"
+   associate_public_ip_address = false
 }
 `

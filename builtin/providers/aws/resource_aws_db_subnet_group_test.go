@@ -6,7 +6,10 @@ import (
 
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/goamz/rds"
+
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/aws/awserr"
+	"github.com/awslabs/aws-sdk-go/service/rds"
 )
 
 func TestAccAWSDBSubnetGroup(t *testing.T) {
@@ -42,7 +45,8 @@ func testAccCheckDBSubnetGroupDestroy(s *terraform.State) error {
 		}
 
 		// Try to find the resource
-		resp, err := conn.DescribeDBSubnetGroups(&rds.DescribeDBSubnetGroups{rs.Primary.ID})
+		resp, err := conn.DescribeDBSubnetGroups(
+			&rds.DescribeDBSubnetGroupsInput{DBSubnetGroupName: aws.String(rs.Primary.ID)})
 		if err == nil {
 			if len(resp.DBSubnetGroups) > 0 {
 				return fmt.Errorf("still exist.")
@@ -52,11 +56,11 @@ func testAccCheckDBSubnetGroupDestroy(s *terraform.State) error {
 		}
 
 		// Verify the error is what we want
-		rdserr, ok := err.(*rds.Error)
+		rdserr, ok := err.(awserr.Error)
 		if !ok {
 			return err
 		}
-		if rdserr.Code != "DBSubnetGroupNotFoundFault" {
+		if rdserr.Code() != "DBSubnetGroupNotFoundFault" {
 			return err
 		}
 	}
@@ -76,7 +80,8 @@ func testAccCheckDBSubnetGroupExists(n string, v *rds.DBSubnetGroup) resource.Te
 		}
 
 		conn := testAccProvider.Meta().(*AWSClient).rdsconn
-		resp, err := conn.DescribeDBSubnetGroups(&rds.DescribeDBSubnetGroups{rs.Primary.ID})
+		resp, err := conn.DescribeDBSubnetGroups(
+			&rds.DescribeDBSubnetGroupsInput{DBSubnetGroupName: aws.String(rs.Primary.ID)})
 		if err != nil {
 			return err
 		}
@@ -84,7 +89,7 @@ func testAccCheckDBSubnetGroupExists(n string, v *rds.DBSubnetGroup) resource.Te
 			return fmt.Errorf("DbSubnetGroup not found")
 		}
 
-		*v = resp.DBSubnetGroups[0]
+		*v = *resp.DBSubnetGroups[0]
 
 		return nil
 	}
@@ -99,16 +104,22 @@ resource "aws_subnet" "foo" {
 	cidr_block = "10.1.1.0/24"
 	availability_zone = "us-west-2a"
 	vpc_id = "${aws_vpc.foo.id}"
+	tags {
+		Name = "tf-dbsubnet-test-1"
+	}
 }
 
 resource "aws_subnet" "bar" {
 	cidr_block = "10.1.2.0/24"
 	availability_zone = "us-west-2b"
 	vpc_id = "${aws_vpc.foo.id}"
+	tags {
+		Name = "tf-dbsubnet-test-2"
+	}
 }
 
 resource "aws_db_subnet_group" "foo" {
-	name = "foo"
+	name = "FOO"
 	description = "foo description"
 	subnet_ids = ["${aws_subnet.foo.id}", "${aws_subnet.bar.id}"]
 }

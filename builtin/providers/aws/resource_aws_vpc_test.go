@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/aws/awserr"
+	"github.com/awslabs/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
-	"github.com/mitchellh/goamz/ec2"
 )
 
 func TestAccVpc_basic(t *testing.T) {
@@ -119,7 +121,10 @@ func testAccCheckVpcDestroy(s *terraform.State) error {
 		}
 
 		// Try to find the VPC
-		resp, err := conn.DescribeVpcs([]string{rs.Primary.ID}, ec2.NewFilter())
+		DescribeVpcOpts := &ec2.DescribeVPCsInput{
+			VPCIDs: []*string{aws.String(rs.Primary.ID)},
+		}
+		resp, err := conn.DescribeVPCs(DescribeVpcOpts)
 		if err == nil {
 			if len(resp.VPCs) > 0 {
 				return fmt.Errorf("VPCs still exist.")
@@ -129,11 +134,11 @@ func testAccCheckVpcDestroy(s *terraform.State) error {
 		}
 
 		// Verify the error is what we want
-		ec2err, ok := err.(*ec2.Error)
+		ec2err, ok := err.(awserr.Error)
 		if !ok {
 			return err
 		}
-		if ec2err.Code != "InvalidVpcID.NotFound" {
+		if ec2err.Code() != "InvalidVpcID.NotFound" {
 			return err
 		}
 	}
@@ -143,8 +148,9 @@ func testAccCheckVpcDestroy(s *terraform.State) error {
 
 func testAccCheckVpcCidr(vpc *ec2.VPC, expected string) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		if vpc.CidrBlock != expected {
-			return fmt.Errorf("Bad cidr: %s", vpc.CidrBlock)
+		CIDRBlock := vpc.CIDRBlock
+		if *CIDRBlock != expected {
+			return fmt.Errorf("Bad cidr: %s", *vpc.CIDRBlock)
 		}
 
 		return nil
@@ -163,7 +169,10 @@ func testAccCheckVpcExists(n string, vpc *ec2.VPC) resource.TestCheckFunc {
 		}
 
 		conn := testAccProvider.Meta().(*AWSClient).ec2conn
-		resp, err := conn.DescribeVpcs([]string{rs.Primary.ID}, ec2.NewFilter())
+		DescribeVpcOpts := &ec2.DescribeVPCsInput{
+			VPCIDs: []*string{aws.String(rs.Primary.ID)},
+		}
+		resp, err := conn.DescribeVPCs(DescribeVpcOpts)
 		if err != nil {
 			return err
 		}
@@ -171,10 +180,30 @@ func testAccCheckVpcExists(n string, vpc *ec2.VPC) resource.TestCheckFunc {
 			return fmt.Errorf("VPC not found")
 		}
 
-		*vpc = resp.VPCs[0]
+		*vpc = *resp.VPCs[0]
 
 		return nil
 	}
+}
+
+// https://github.com/hashicorp/terraform/issues/1301
+func TestAccVpc_bothDnsOptionsSet(t *testing.T) {
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckVpcDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccVpcConfig_BothDnsOptions,
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr(
+						"aws_vpc.bar", "enable_dns_hostnames", "true"),
+					resource.TestCheckResourceAttr(
+						"aws_vpc.bar", "enable_dns_support", "true"),
+				),
+			},
+		},
+	})
 }
 
 const testAccVpcConfig = `
@@ -217,3 +246,11 @@ resource "aws_vpc" "bar" {
 }
 `
 
+const testAccVpcConfig_BothDnsOptions = `
+resource "aws_vpc" "bar" {
+	cidr_block = "10.2.0.0/16"
+
+	enable_dns_hostnames = true
+	enable_dns_support = true
+}
+`
