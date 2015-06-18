@@ -9,10 +9,10 @@ import (
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
 
-	"github.com/awslabs/aws-sdk-go/aws"
-	"github.com/awslabs/aws-sdk-go/aws/awserr"
-	"github.com/awslabs/aws-sdk-go/service/autoscaling"
-	"github.com/awslabs/aws-sdk-go/service/elb"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/service/autoscaling"
+	"github.com/aws/aws-sdk-go/service/elb"
 )
 
 func resourceAwsAutoscalingGroup() *schema.Resource {
@@ -79,7 +79,6 @@ func resourceAwsAutoscalingGroup() *schema.Resource {
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
-				ForceNew: true,
 			},
 
 			"availability_zones": &schema.Schema{
@@ -241,6 +240,11 @@ func resourceAwsAutoscalingGroupUpdate(d *schema.ResourceData, meta interface{})
 		opts.HealthCheckGracePeriod = aws.Long(int64(d.Get("health_check_grace_period").(int)))
 	}
 
+	if d.HasChange("health_check_type") {
+		opts.HealthCheckGracePeriod = aws.Long(int64(d.Get("health_check_grace_period").(int)))
+		opts.HealthCheckType = aws.String(d.Get("health_check_type").(string))
+	}
+
 	if err := setAutoscalingTags(conn, d); err != nil {
 		return err
 	} else {
@@ -323,7 +327,7 @@ func resourceAwsAutoscalingGroupDelete(d *schema.ResourceData, meta interface{})
 
 func getAwsAutoscalingGroup(
 	d *schema.ResourceData,
-	meta interface{}) (*autoscaling.AutoScalingGroup, error) {
+	meta interface{}) (*autoscaling.Group, error) {
 	conn := meta.(*AWSClient).autoscalingconn
 
 	describeOpts := autoscaling.DescribeAutoScalingGroupsInput{
@@ -458,7 +462,7 @@ func waitForASGCapacity(d *schema.ResourceData, meta interface{}) error {
 			return nil
 		}
 
-		return fmt.Errorf("Still need to wait for more healthy instances.")
+		return fmt.Errorf("Still need to wait for more healthy instances. This could mean instances failed to launch. See Scaling History for more information.")
 	})
 }
 
@@ -466,7 +470,7 @@ func waitForASGCapacity(d *schema.ResourceData, meta interface{}) error {
 // provided ASG.
 //
 // Nested like: lbName -> instanceId -> instanceState
-func getLBInstanceStates(g *autoscaling.AutoScalingGroup, meta interface{}) (map[string]map[string]string, error) {
+func getLBInstanceStates(g *autoscaling.Group, meta interface{}) (map[string]map[string]string, error) {
 	lbInstanceStates := make(map[string]map[string]string)
 	elbconn := meta.(*AWSClient).elbconn
 

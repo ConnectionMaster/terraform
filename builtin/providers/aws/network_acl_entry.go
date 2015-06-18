@@ -5,8 +5,8 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/awslabs/aws-sdk-go/aws"
-	"github.com/awslabs/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/ec2"
 )
 
 func expandNetworkAclEntries(configured []interface{}, entryType string) ([]*ec2.NetworkACLEntry, error) {
@@ -34,6 +34,18 @@ func expandNetworkAclEntries(configured []interface{}, entryType string) ([]*ec2
 			RuleNumber: aws.Long(int64(data["rule_no"].(int))),
 			CIDRBlock:  aws.String(data["cidr_block"].(string)),
 		}
+
+		// Specify additional required fields for ICMP
+		if p == 1 {
+			e.ICMPTypeCode = &ec2.ICMPTypeCode{}
+			if v, ok := data["icmp_code"]; ok {
+				e.ICMPTypeCode.Code = aws.Long(int64(v.(int)))
+			}
+			if v, ok := data["icmp_type"]; ok {
+				e.ICMPTypeCode.Type = aws.Long(int64(v.(int)))
+			}
+		}
+
 		entries = append(entries, e)
 	}
 	return entries, nil

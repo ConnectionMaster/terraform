@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/awslabs/aws-sdk-go/aws"
-	"github.com/awslabs/aws-sdk-go/aws/awserr"
-	"github.com/awslabs/aws-sdk-go/service/elasticache"
-	"github.com/awslabs/aws-sdk-go/service/iam"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/service/elasticache"
+	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/hashicorp/terraform/helper/hashcode"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
@@ -52,8 +52,7 @@ func resourceAwsElasticacheCluster() *schema.Resource {
 			},
 			"port": &schema.Schema{
 				Type:     schema.TypeInt,
-				Default:  11211,
-				Optional: true,
+				Required: true,
 				ForceNew: true,
 			},
 			"engine_version": &schema.Schema{
@@ -123,7 +122,7 @@ func resourceAwsElasticacheClusterCreate(d *schema.ResourceData, meta interface{
 	numNodes := int64(d.Get("num_cache_nodes").(int)) // 2
 	engine := d.Get("engine").(string)                // memcached
 	engineVersion := d.Get("engine_version").(string) // 1.4.14
-	port := int64(d.Get("port").(int))                // 11211
+	port := int64(d.Get("port").(int))                // e.g) 11211
 	subnetGroupName := d.Get("subnet_group_name").(string)
 	securityNameSet := d.Get("security_group_names").(*schema.Set)
 	securityIdSet := d.Get("security_group_ids").(*schema.Set)
@@ -308,7 +307,8 @@ func resourceAwsElasticacheClusterDelete(d *schema.ResourceData, meta interface{
 func CacheClusterStateRefreshFunc(conn *elasticache.ElastiCache, clusterID, givenState string, pending []string) resource.StateRefreshFunc {
 	return func() (interface{}, string, error) {
 		resp, err := conn.DescribeCacheClusters(&elasticache.DescribeCacheClustersInput{
-			CacheClusterID: aws.String(clusterID),
+			CacheClusterID:    aws.String(clusterID),
+			ShowCacheNodeInfo: aws.Boolean(true),
 		})
 		if err != nil {
 			apierr := err.(awserr.Error)
@@ -336,6 +336,18 @@ func CacheClusterStateRefreshFunc(conn *elasticache.ElastiCache, clusterID, give
 
 		// return given state if it's not in pending
 		if givenState != "" {
+			// check to make sure we have the node count we're expecting
+			if int64(len(c.CacheNodes)) != *c.NumCacheNodes {
+				log.Printf("[DEBUG] Node count is not what is expected: %d found, %d expected", len(c.CacheNodes), *c.NumCacheNodes)
+				return nil, "creating", nil
+			}
+			// loop the nodes and check their status as well
+			for _, n := range c.CacheNodes {
+				if n.CacheNodeStatus != nil && *n.CacheNodeStatus != "available" {
+					log.Printf("[DEBUG] Node (%s) is not yet available, status: %s", *n.CacheNodeID, *n.CacheNodeStatus)
+					return nil, "creating", nil
+				}
+			}
 			return c, givenState, nil
 		}
 		log.Printf("[DEBUG] current status: %v", *c.CacheClusterStatus)

@@ -5,15 +5,16 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/awslabs/aws-sdk-go/aws"
-	"github.com/awslabs/aws-sdk-go/aws/awserr"
-	"github.com/awslabs/aws-sdk-go/service/ec2"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/awsutil"
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/helper/schema"
 	"github.com/hashicorp/terraform/terraform"
 )
 
-func TestAccAWSInstance_normal(t *testing.T) {
+func TestAccAWSInstance_basic(t *testing.T) {
 	var v ec2.Instance
 	var vol *ec2.Volume
 
@@ -456,6 +457,40 @@ func TestAccAWSInstance_associatePublicIPAndPrivateIP(t *testing.T) {
 	})
 }
 
+// Guard against regression with KeyPairs
+// https://github.com/hashicorp/terraform/issues/2302
+func TestAccAWSInstance_keyPairCheck(t *testing.T) {
+	var v ec2.Instance
+
+	testCheckKeyPair := func(keyName string) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			if v.KeyName == nil {
+				return fmt.Errorf("No Key Pair found, expected(%s)", keyName)
+			}
+			if *v.KeyName != keyName {
+				return fmt.Errorf("Bad key name, expected (%s), got (%s)", keyName, awsutil.StringValue(v.KeyName))
+			}
+
+			return nil
+		}
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckInstanceDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccInstanceConfigKeyPair,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckInstanceExists("aws_instance.foo", &v),
+					testCheckKeyPair("tmp-key"),
+				),
+			},
+		},
+	})
+}
+
 func testAccCheckInstanceDestroy(s *terraform.State) error {
 	return testAccCheckInstanceDestroyWithProvider(s, testAccProvider)
 }
@@ -653,7 +688,6 @@ resource "aws_instance" "foo" {
 	ami = "ami-4fccb37f"
 	instance_type = "m1.small"
 	subnet_id = "${aws_subnet.foo.id}"
-	source_dest_check = true
 }
 `
 
@@ -888,5 +922,21 @@ resource "aws_eip" "foo_eip" {
   instance = "${aws_instance.foo_instance.id}"
   vpc = true
 	depends_on = ["aws_internet_gateway.gw"]
+}
+`
+const testAccInstanceConfigKeyPair = `
+provider "aws" {
+	region = "us-east-1"
+}
+
+resource "aws_key_pair" "debugging" {
+	key_name = "tmp-key"
+	public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQD3F6tyPEFEzV0LX3X8BsXdMsQz1x2cEikKDEY0aIj41qgxMCP/iteneqXSIFZBp5vizPvaoIR3Um9xK7PGoW8giupGn+EPuxIA4cDM4vzOqOkiMPhz5XK0whEjkVzTo4+S0puvDZuwIsdiW9mxhJc7tgBNL0cYlWSYVkz4G/fslNfRPW5mYAM49f4fhtxPb5ok4Q2Lg9dPKVHO/Bgeu5woMc7RY0p1ej6D4CKFE6lymSDJpW0YHX/wqE9+cfEauh7xZcG0q9t2ta6F6fmX0agvpFyZo8aFbXeUBr7osSCJNgvavWbM/06niWrOvYX2xwWdhXmXSrbX8ZbabVohBK41 phodgson@thoughtworks.com"
+}
+
+resource "aws_instance" "foo" {
+  ami = "ami-408c7f28"
+  instance_type = "t1.micro"
+  key_name = "${aws_key_pair.debugging.key_name}"
 }
 `
