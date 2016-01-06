@@ -251,6 +251,60 @@ func TestEval(t *testing.T) {
 			"foo 43",
 			ast.TypeString,
 		},
+
+		{
+			"foo ${-46}",
+			nil,
+			false,
+			"foo -46",
+			ast.TypeString,
+		},
+
+		{
+			"foo ${-46 + 5}",
+			nil,
+			false,
+			"foo -41",
+			ast.TypeString,
+		},
+
+		{
+			"foo ${46 + -5}",
+			nil,
+			false,
+			"foo 41",
+			ast.TypeString,
+		},
+
+		{
+			"foo ${-bar}",
+			&ast.BasicScope{
+				VarMap: map[string]ast.Variable{
+					"bar": ast.Variable{
+						Value: 41,
+						Type:  ast.TypeInt,
+					},
+				},
+			},
+			false,
+			"foo -41",
+			ast.TypeString,
+		},
+
+		{
+			"foo ${5 + -bar}",
+			&ast.BasicScope{
+				VarMap: map[string]ast.Variable{
+					"bar": ast.Variable{
+						Value: 41,
+						Type:  ast.TypeInt,
+					},
+				},
+			},
+			false,
+			"foo -36",
+			ast.TypeString,
+		},
 	}
 
 	for _, tc := range cases {
@@ -260,7 +314,7 @@ func TestEval(t *testing.T) {
 		}
 
 		out, outType, err := Eval(node, &EvalConfig{GlobalScope: tc.Scope})
-		if (err != nil) != tc.Error {
+		if err != nil != tc.Error {
 			t.Fatalf("Error: %s\n\nInput: %s", err, tc.Input)
 		}
 		if outType != tc.ResultType {

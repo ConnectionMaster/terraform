@@ -2,7 +2,9 @@ package aws
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
@@ -42,6 +44,8 @@ func TestAccAWSDBParameterGroup_basic(t *testing.T) {
 						"aws_db_parameter_group.bar", "parameter.2478663599.name", "character_set_client"),
 					resource.TestCheckResourceAttr(
 						"aws_db_parameter_group.bar", "parameter.2478663599.value", "utf8"),
+					resource.TestCheckResourceAttr(
+						"aws_db_parameter_group.bar", "tags.#", "1"),
 				),
 			},
 			resource.TestStep{
@@ -75,6 +79,8 @@ func TestAccAWSDBParameterGroup_basic(t *testing.T) {
 						"aws_db_parameter_group.bar", "parameter.2478663599.name", "character_set_client"),
 					resource.TestCheckResourceAttr(
 						"aws_db_parameter_group.bar", "parameter.2478663599.value", "utf8"),
+					resource.TestCheckResourceAttr(
+						"aws_db_parameter_group.bar", "tags.#", "2"),
 				),
 			},
 		},
@@ -106,6 +112,46 @@ func TestAccAWSDBParameterGroupOnly(t *testing.T) {
 	})
 }
 
+func TestResourceAWSDBParameterGroupName_validation(t *testing.T) {
+	cases := []struct {
+		Value    string
+		ErrCount int
+	}{
+		{
+			Value:    "tEsting123",
+			ErrCount: 1,
+		},
+		{
+			Value:    "testing123!",
+			ErrCount: 1,
+		},
+		{
+			Value:    "1testing123",
+			ErrCount: 1,
+		},
+		{
+			Value:    "testing--123",
+			ErrCount: 1,
+		},
+		{
+			Value:    "testing123-",
+			ErrCount: 1,
+		},
+		{
+			Value:    randomString(256),
+			ErrCount: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		_, errors := validateDbParamGroupName(tc.Value, "aws_db_parameter_group_name")
+
+		if len(errors) != tc.ErrCount {
+			t.Fatalf("Expected the DB Parameter Group Name to trigger a validation error")
+		}
+	}
+}
+
 func testAccCheckAWSDBParameterGroupDestroy(s *terraform.State) error {
 	conn := testAccProvider.Meta().(*AWSClient).rdsconn
 
@@ -132,7 +178,7 @@ func testAccCheckAWSDBParameterGroupDestroy(s *terraform.State) error {
 		if !ok {
 			return err
 		}
-		if newerr.Code() != "InvalidDBParameterGroup.NotFound" {
+		if newerr.Code() != "DBParameterGroupNotFound" {
 			return err
 		}
 	}
@@ -193,6 +239,16 @@ func testAccCheckAWSDBParameterGroupExists(n string, v *rds.DBParameterGroup) re
 	}
 }
 
+func randomString(strlen int) string {
+	rand.Seed(time.Now().UTC().UnixNano())
+	const chars = "abcdefghijklmnopqrstuvwxyz"
+	result := make([]byte, strlen)
+	for i := 0; i < strlen; i++ {
+		result[i] = chars[rand.Intn(len(chars))]
+	}
+	return string(result)
+}
+
 const testAccAWSDBParameterGroupConfig = `
 resource "aws_db_parameter_group" "bar" {
 	name = "parameter-group-test-terraform"
@@ -209,6 +265,9 @@ resource "aws_db_parameter_group" "bar" {
 	parameter{
 	  name = "character_set_results"
 	  value = "utf8"
+	}
+	tags {
+		foo = "bar"
 	}
 }
 `
@@ -237,6 +296,10 @@ resource "aws_db_parameter_group" "bar" {
 	parameter {
 	  name = "collation_connection"
 	  value = "utf8_unicode_ci"
+	}
+	tags {
+		foo = "bar"
+		baz = "foo"
 	}
 }
 `

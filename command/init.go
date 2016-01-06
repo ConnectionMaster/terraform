@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/hashicorp/go-getter"
 	"github.com/hashicorp/terraform/config"
 	"github.com/hashicorp/terraform/config/module"
 	"github.com/hashicorp/terraform/terraform"
@@ -75,7 +76,7 @@ func (c *InitCommand) Run(args []string) int {
 	}
 
 	// Detect
-	source, err = module.Detect(source, pwd)
+	source, err = getter.Detect(source, pwd, getter.Detectors)
 	if err != nil {
 		c.Ui.Error(fmt.Sprintf(
 			"Error with module source: %s", err))
@@ -148,6 +149,8 @@ Options:
 
   -backend-config="k=v"  Specifies configuration for the remote storage
                          backend. This can be specified multiple times.
+
+  -no-color           If specified, output won't contain any color.
 
 `
 	return strings.TrimSpace(helpText)

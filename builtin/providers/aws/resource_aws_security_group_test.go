@@ -46,6 +46,26 @@ func TestAccAWSSecurityGroup_basic(t *testing.T) {
 	})
 }
 
+func TestAccAWSSecurityGroup_namePrefix(t *testing.T) {
+	var group ec2.SecurityGroup
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSSecurityGroupDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccAWSSecurityGroupPrefixNameConfig,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSSecurityGroupExists("aws_security_group.baz", &group),
+					testAccCheckAWSSecurityGroupGeneratedNamePrefix(
+						"aws_security_group.baz", "baz-"),
+				),
+			},
+		},
+	})
+}
+
 func TestAccAWSSecurityGroup_self(t *testing.T) {
 	var group ec2.SecurityGroup
 
@@ -56,7 +76,7 @@ func TestAccAWSSecurityGroup_self(t *testing.T) {
 			}
 		}()
 
-		if *group.IPPermissions[0].UserIDGroupPairs[0].GroupID != *group.GroupID {
+		if *group.IpPermissions[0].UserIdGroupPairs[0].GroupId != *group.GroupId {
 			return fmt.Errorf("bad: %#v", group)
 		}
 
@@ -95,7 +115,7 @@ func TestAccAWSSecurityGroup_vpc(t *testing.T) {
 	var group ec2.SecurityGroup
 
 	testCheck := func(*terraform.State) error {
-		if *group.VPCID == "" {
+		if *group.VpcId == "" {
 			return fmt.Errorf("should have vpc ID")
 		}
 
@@ -147,7 +167,7 @@ func TestAccAWSSecurityGroup_vpcNegOneIngress(t *testing.T) {
 	var group ec2.SecurityGroup
 
 	testCheck := func(*terraform.State) error {
-		if *group.VPCID == "" {
+		if *group.VpcId == "" {
 			return fmt.Errorf("should have vpc ID")
 		}
 
@@ -300,11 +320,11 @@ func testAccCheckAWSSecurityGroupDestroy(s *terraform.State) error {
 
 		// Retrieve our group
 		req := &ec2.DescribeSecurityGroupsInput{
-			GroupIDs: []*string{aws.String(rs.Primary.ID)},
+			GroupIds: []*string{aws.String(rs.Primary.ID)},
 		}
 		resp, err := conn.DescribeSecurityGroups(req)
 		if err == nil {
-			if len(resp.SecurityGroups) > 0 && *resp.SecurityGroups[0].GroupID == rs.Primary.ID {
+			if len(resp.SecurityGroups) > 0 && *resp.SecurityGroups[0].GroupId == rs.Primary.ID {
 				return fmt.Errorf("Security Group (%s) still exists.", rs.Primary.ID)
 			}
 
@@ -324,6 +344,24 @@ func testAccCheckAWSSecurityGroupDestroy(s *terraform.State) error {
 	return nil
 }
 
+func testAccCheckAWSSecurityGroupGeneratedNamePrefix(
+	resource, prefix string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		r, ok := s.RootModule().Resources[resource]
+		if !ok {
+			return fmt.Errorf("Resource not found")
+		}
+		name, ok := r.Primary.Attributes["name"]
+		if !ok {
+			return fmt.Errorf("Name attr not found: %#v", r.Primary.Attributes)
+		}
+		if !strings.HasPrefix(name, prefix) {
+			return fmt.Errorf("Name: %q, does not have prefix: %q", name, prefix)
+		}
+		return nil
+	}
+}
+
 func testAccCheckAWSSecurityGroupExists(n string, group *ec2.SecurityGroup) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		rs, ok := s.RootModule().Resources[n]
@@ -337,14 +375,14 @@ func testAccCheckAWSSecurityGroupExists(n string, group *ec2.SecurityGroup) reso
 
 		conn := testAccProvider.Meta().(*AWSClient).ec2conn
 		req := &ec2.DescribeSecurityGroupsInput{
-			GroupIDs: []*string{aws.String(rs.Primary.ID)},
+			GroupIds: []*string{aws.String(rs.Primary.ID)},
 		}
 		resp, err := conn.DescribeSecurityGroups(req)
 		if err != nil {
 			return err
 		}
 
-		if len(resp.SecurityGroups) > 0 && *resp.SecurityGroups[0].GroupID == rs.Primary.ID {
+		if len(resp.SecurityGroups) > 0 && *resp.SecurityGroups[0].GroupId == rs.Primary.ID {
 			*group = *resp.SecurityGroups[0]
 			return nil
 		}
@@ -355,11 +393,11 @@ func testAccCheckAWSSecurityGroupExists(n string, group *ec2.SecurityGroup) reso
 
 func testAccCheckAWSSecurityGroupAttributes(group *ec2.SecurityGroup) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		p := &ec2.IPPermission{
-			FromPort:   aws.Long(80),
-			ToPort:     aws.Long(8000),
-			IPProtocol: aws.String("tcp"),
-			IPRanges:   []*ec2.IPRange{&ec2.IPRange{CIDRIP: aws.String("10.0.0.0/8")}},
+		p := &ec2.IpPermission{
+			FromPort:   aws.Int64(80),
+			ToPort:     aws.Int64(8000),
+			IpProtocol: aws.String("tcp"),
+			IpRanges:   []*ec2.IpRange{&ec2.IpRange{CidrIp: aws.String("10.0.0.0/8")}},
 		}
 
 		if *group.GroupName != "terraform_acceptance_test_example" {
@@ -370,15 +408,15 @@ func testAccCheckAWSSecurityGroupAttributes(group *ec2.SecurityGroup) resource.T
 			return fmt.Errorf("Bad description: %s", *group.Description)
 		}
 
-		if len(group.IPPermissions) == 0 {
+		if len(group.IpPermissions) == 0 {
 			return fmt.Errorf("No IPPerms")
 		}
 
 		// Compare our ingress
-		if !reflect.DeepEqual(group.IPPermissions[0], p) {
+		if !reflect.DeepEqual(group.IpPermissions[0], p) {
 			return fmt.Errorf(
 				"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
-				group.IPPermissions[0],
+				group.IpPermissions[0],
 				p)
 		}
 
@@ -388,9 +426,9 @@ func testAccCheckAWSSecurityGroupAttributes(group *ec2.SecurityGroup) resource.T
 
 func testAccCheckAWSSecurityGroupAttributesNegOneProtocol(group *ec2.SecurityGroup) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		p := &ec2.IPPermission{
-			IPProtocol: aws.String("-1"),
-			IPRanges:   []*ec2.IPRange{&ec2.IPRange{CIDRIP: aws.String("10.0.0.0/8")}},
+		p := &ec2.IpPermission{
+			IpProtocol: aws.String("-1"),
+			IpRanges:   []*ec2.IpRange{&ec2.IpRange{CidrIp: aws.String("10.0.0.0/8")}},
 		}
 
 		if *group.GroupName != "terraform_acceptance_test_example" {
@@ -401,15 +439,15 @@ func testAccCheckAWSSecurityGroupAttributesNegOneProtocol(group *ec2.SecurityGro
 			return fmt.Errorf("Bad description: %s", *group.Description)
 		}
 
-		if len(group.IPPermissions) == 0 {
+		if len(group.IpPermissions) == 0 {
 			return fmt.Errorf("No IPPerms")
 		}
 
 		// Compare our ingress
-		if !reflect.DeepEqual(group.IPPermissions[0], p) {
+		if !reflect.DeepEqual(group.IpPermissions[0], p) {
 			return fmt.Errorf(
 				"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
-				group.IPPermissions[0],
+				group.IpPermissions[0],
 				p)
 		}
 
@@ -447,23 +485,23 @@ func TestAccAWSSecurityGroup_tags(t *testing.T) {
 
 func testAccCheckAWSSecurityGroupAttributesChanged(group *ec2.SecurityGroup) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
-		p := []*ec2.IPPermission{
-			&ec2.IPPermission{
-				FromPort:   aws.Long(80),
-				ToPort:     aws.Long(9000),
-				IPProtocol: aws.String("tcp"),
-				IPRanges:   []*ec2.IPRange{&ec2.IPRange{CIDRIP: aws.String("10.0.0.0/8")}},
+		p := []*ec2.IpPermission{
+			&ec2.IpPermission{
+				FromPort:   aws.Int64(80),
+				ToPort:     aws.Int64(9000),
+				IpProtocol: aws.String("tcp"),
+				IpRanges:   []*ec2.IpRange{&ec2.IpRange{CidrIp: aws.String("10.0.0.0/8")}},
 			},
-			&ec2.IPPermission{
-				FromPort:   aws.Long(80),
-				ToPort:     aws.Long(8000),
-				IPProtocol: aws.String("tcp"),
-				IPRanges: []*ec2.IPRange{
-					&ec2.IPRange{
-						CIDRIP: aws.String("0.0.0.0/0"),
+			&ec2.IpPermission{
+				FromPort:   aws.Int64(80),
+				ToPort:     aws.Int64(8000),
+				IpProtocol: aws.String("tcp"),
+				IpRanges: []*ec2.IpRange{
+					&ec2.IpRange{
+						CidrIp: aws.String("0.0.0.0/0"),
 					},
-					&ec2.IPRange{
-						CIDRIP: aws.String("10.0.0.0/8"),
+					&ec2.IpRange{
+						CidrIp: aws.String("10.0.0.0/8"),
 					},
 				},
 			},
@@ -478,22 +516,22 @@ func testAccCheckAWSSecurityGroupAttributesChanged(group *ec2.SecurityGroup) res
 		}
 
 		// Compare our ingress
-		if len(group.IPPermissions) != 2 {
+		if len(group.IpPermissions) != 2 {
 			return fmt.Errorf(
 				"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
-				group.IPPermissions,
+				group.IpPermissions,
 				p)
 		}
 
-		if *group.IPPermissions[0].ToPort == 8000 {
-			group.IPPermissions[1], group.IPPermissions[0] =
-				group.IPPermissions[0], group.IPPermissions[1]
+		if *group.IpPermissions[0].ToPort == 8000 {
+			group.IpPermissions[1], group.IpPermissions[0] =
+				group.IpPermissions[0], group.IpPermissions[1]
 		}
 
-		if !reflect.DeepEqual(group.IPPermissions, p) {
+		if !reflect.DeepEqual(group.IpPermissions, p) {
 			return fmt.Errorf(
 				"Got:\n\n%#v\n\nExpected:\n\n%#v\n",
-				group.IPPermissions,
+				group.IpPermissions,
 				p)
 		}
 
@@ -514,18 +552,18 @@ func testAccCheckAWSSecurityGroupExistsWithoutDefault(n string) resource.TestChe
 
 		conn := testAccProvider.Meta().(*AWSClient).ec2conn
 		req := &ec2.DescribeSecurityGroupsInput{
-			GroupIDs: []*string{aws.String(rs.Primary.ID)},
+			GroupIds: []*string{aws.String(rs.Primary.ID)},
 		}
 		resp, err := conn.DescribeSecurityGroups(req)
 		if err != nil {
 			return err
 		}
 
-		if len(resp.SecurityGroups) > 0 && *resp.SecurityGroups[0].GroupID == rs.Primary.ID {
+		if len(resp.SecurityGroups) > 0 && *resp.SecurityGroups[0].GroupId == rs.Primary.ID {
 			group := *resp.SecurityGroups[0]
 
-			if len(group.IPPermissionsEgress) != 1 {
-				return fmt.Errorf("Security Group should have only 1 egress rule, got %d", len(group.IPPermissionsEgress))
+			if len(group.IpPermissionsEgress) != 1 {
+				return fmt.Errorf("Security Group should have only 1 egress rule, got %d", len(group.IpPermissionsEgress))
 			}
 		}
 
@@ -807,5 +845,16 @@ provider "aws" {
 resource "aws_security_group" "web" {
   name = "terraform_acceptance_test_example_1"
   description = "Used in the terraform acceptance tests"
+}
+`
+
+const testAccAWSSecurityGroupPrefixNameConfig = `
+provider "aws" {
+  region = "us-east-1"
+}
+
+resource "aws_security_group" "baz" {
+   name_prefix = "baz-"
+   description = "Used in the terraform acceptance tests"
 }
 `

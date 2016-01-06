@@ -36,10 +36,11 @@ resource "aws_instance" "web" {
         environment = "_default"
         run_list = ["cookbook::recipe"]
         node_name = "webserver1"
+        secret_key = "${file("../encrypted_data_bag_secret")}"
         server_url = "https://chef.company.com/organizations/org1"
         validation_client_name = "chef-validator"
-        validation_key_path = "../chef-validator.pem"
-        version = "11.18.6"
+        validation_key = "${file("../chef-validator.pem")}"
+        version = "12.4.1"
     }
 }
 ```
@@ -67,6 +68,13 @@ The following arguments are supported:
 
 * `node_name (string)` - (Required) The name of the node to register with the Chef Server.
 
+* `ohai_hints (array)` - (Optional) A list with
+  [Ohai hints](https://docs.chef.io/ohai.html#hints) to upload to the node.
+
+* `os_type (string)` - (Optional) The OS type of the node. Valid options are: `linux` and
+  `windows`. If not supplied the connection type will be used to determine the OS type (`ssh`
+  will assume `linux` and `winrm` will assume `windows`).
+
 * `prevent_sudo (boolean)` - (Optional) Prevent the use of sudo while installing, configuring
   and running the initial Chef Client run. This option is only used with `ssh` type
   [connections](/docs/provisioners/connection.html).
@@ -74,6 +82,11 @@ The following arguments are supported:
 * `run_list (array)` - (Required) A list with recipes that will be invoked during the initial
   Chef Client run. The run-list will also be saved to the Chef Server after a successful
   initial run.
+
+* `secret_key (string)` - (Optional) The contents of the secret key that is used
+  by the client to decrypt data bags on the Chef Server. The key will be uploaded to the remote
+  machine.  These can be loaded from a file on disk using the [`file()` interpolation
+  function](/docs/configuration/interpolation.html#file_path_).
 
 * `server_url (string)` - (Required) The URL to the Chef server. This includes the path to
   the organization. See the example.
@@ -88,9 +101,16 @@ The following arguments are supported:
 * `validation_client_name (string)` - (Required) The name of the validation client to use
   for the initial communication with the Chef Server.
 
-* `validation_key_path (string)` - (Required) The path to the validation key that is needed
+* `validation_key (string)` - (Required) The contents of the validation key that is needed
   by the node to register itself with the Chef Server. The key will be uploaded to the remote
-  machine.
+  machine. These can be loaded from a file on disk using the [`file()`
+  interpolation function](/docs/configuration/interpolation.html#file_path_).
 
 * `version (string)` - (Optional) The Chef Client version to install on the remote machine.
   If not set the latest available version will be installed.
+
+These are supported for backwards compatibility and may be removed in a
+future version:
+
+* `validation_key_path (string)` - __Deprecated: please use `validation_key` instead__.
+* `secret_key_path (string)` - __Deprecated: please use `secret_key` instead__.

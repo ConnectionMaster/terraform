@@ -21,7 +21,7 @@ resource "docker_container" "ubuntu" {
 
 # Find the latest Ubuntu precise image.
 resource "docker_image" "ubuntu" {
-    image = "ubuntu:precise"
+  name = "ubuntu:precise"
 }
 ```
 
@@ -35,13 +35,24 @@ The following arguments are supported:
   as is shown in the example above.
 
 * `command` - (Optional, list of strings) The command to use to start the
-    container.
+    container. For example, to run `/usr/bin/myprogram -f baz.conf` set the
+    command to be `["/usr/bin/myprogram", "-f", "baz.conf"]`.
+* `entrypoint` - (Optional, list of strings) The command to use as the
+    Entrypoint for the container. The Entrypoint allows you to configure a
+    container to run as an executable. For example, to run `/usr/bin/myprogram`
+    when starting a container, set the entrypoint to be
+    `["/usr/bin/myprogram"]`.
 * `dns` - (Optional, set of strings) Set of DNS servers.
 * `env` - (Optional, set of strings) Environmental variables to set.
+* `labels` - (Optional) Key/value pairs to set as labels on the container.
 * `links` - (Optional, set of strings) Set of links for link based
   connectivity between containers that are running on the same host.
 * `hostname` - (Optional, string) Hostname of the container.
 * `domainname` - (Optional, string) Domain name of the container.
+* `restart` - (Optional, string) The restart policy for the container. Must be
+  one of "no", "on-failure", "always".
+* `max_retry_count` - (Optional, int) The maximum amount of times to an attempt
+  a restart when `restart` is set to "on-failure"
 * `must_run` - (Optional, bool) If true, then the Docker container will be
   kept running. If false, then as long as the container exists, Terraform
   assumes it is successful.
@@ -49,6 +60,14 @@ The following arguments are supported:
 * `privileged` - (Optional, bool) Run container in privileged mode.
 * `publish_all_ports` - (Optional, bool) Publish all ports of the container.
 * `volumes` - (Optional) See [Volumes](#volumes) below for details.
+* `memory` - (Optional, int) The memory limit for the container in MBs.
+* `memory_swap` - (Optional, int) The total memory limit (memory + swap) for the
+  container in MBs.
+* `cpu_shares` - (Optional, int) CPU shares (relative weight) for the container.
+* `log_driver` - (Optional, string) The logging driver to use for the container.
+  Defaults to "json-file".
+* `log_opts` - (Optional) Key/value pairs to use as options for the logging
+  driver.
 
 <a id="ports"></a>
 ## Ports
@@ -76,7 +95,7 @@ the following:
   volume will be mounted.
 * `host_path` - (Optional, string) The path on the host where the volume
   is coming from.
-* `read_only` - (Optinal, bool) If true, this volume will be readonly.
+* `read_only` - (Optional, bool) If true, this volume will be readonly.
   Defaults to false.
 
 ## Attributes Reference

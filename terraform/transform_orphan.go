@@ -2,7 +2,7 @@ package terraform
 
 import (
 	"fmt"
-	"log"
+	"strings"
 
 	"github.com/hashicorp/terraform/config"
 	"github.com/hashicorp/terraform/config/module"
@@ -29,7 +29,7 @@ type OrphanTransformer struct {
 	// Targets are user-specified resources to target. We need to be aware of
 	// these so we don't improperly identify orphans when they've just been
 	// filtered out of the graph via targeting.
-	Targeting bool
+	Targets []ResourceAddress
 
 	// View, if non-nil will set a view on the module state.
 	View string
@@ -38,13 +38,6 @@ type OrphanTransformer struct {
 func (t *OrphanTransformer) Transform(g *Graph) error {
 	if t.State == nil {
 		// If the entire state is nil, there can't be any orphans
-		return nil
-	}
-
-	if t.Targeting {
-		log.Printf("Skipping orphan transformer because we have targets.")
-		// If we are in a run where we are targeting nodes, we won't process
-		// orphans for this run.
 		return nil
 	}
 
@@ -74,8 +67,24 @@ func (t *OrphanTransformer) Transform(g *Graph) error {
 			state = state.View(t.View)
 		}
 
-		// Go over each resource orphan and add it to the graph.
 		resourceOrphans := state.Orphans(config)
+		if len(t.Targets) > 0 {
+			var targetedOrphans []string
+			for _, o := range resourceOrphans {
+				targeted := false
+				for _, t := range t.Targets {
+					prefix := fmt.Sprintf("%s.%s.%d", t.Type, t.Name, t.Index)
+					if strings.HasPrefix(o, prefix) {
+						targeted = true
+					}
+				}
+				if targeted {
+					targetedOrphans = append(targetedOrphans, o)
+				}
+			}
+			resourceOrphans = targetedOrphans
+		}
+
 		resourceVertexes = make([]dag.Vertex, len(resourceOrphans))
 		for i, k := range resourceOrphans {
 			// If this orphan is represented by some other node somehow,
@@ -100,9 +109,14 @@ func (t *OrphanTransformer) Transform(g *Graph) error {
 	moduleOrphans := t.State.ModuleOrphans(g.Path, config)
 	moduleVertexes := make([]dag.Vertex, len(moduleOrphans))
 	for i, path := range moduleOrphans {
+		var deps []string
+		if s := t.State.ModuleByPath(path); s != nil {
+			deps = s.Dependencies
+		}
+
 		moduleVertexes[i] = g.Add(&graphNodeOrphanModule{
 			Path:        path,
-			dependentOn: t.State.ModuleByPath(path).Dependencies,
+			dependentOn: deps,
 		})
 	}
 
@@ -166,6 +180,10 @@ type graphNodeOrphanResource struct {
 	Provider     string
 
 	dependentOn []string
+}
+
+func (n *graphNodeOrphanResource) ResourceAddress() *ResourceAddress {
+	return n.ResourceAddress()
 }
 
 func (n *graphNodeOrphanResource) DependableName() []string {
@@ -256,8 +274,9 @@ func (n *graphNodeOrphanResource) EvalTree() EvalNode {
 	})
 
 	// Apply
+	var err error
 	seq.Nodes = append(seq.Nodes, &EvalOpFilter{
-		Ops: []walkOperation{walkApply},
+		Ops: []walkOperation{walkApply, walkDestroy},
 		Node: &EvalSequence{
 			Nodes: []EvalNode{
 				&EvalReadDiff{
@@ -278,6 +297,7 @@ func (n *graphNodeOrphanResource) EvalTree() EvalNode {
 					Diff:     &diff,
 					Provider: &provider,
 					Output:   &state,
+					Error:    &err,
 				},
 				&EvalWriteState{
 					Name:         n.ResourceName,
@@ -285,6 +305,11 @@ func (n *graphNodeOrphanResource) EvalTree() EvalNode {
 					Provider:     n.Provider,
 					Dependencies: n.DependentOn(),
 					State:        &state,
+				},
+				&EvalApplyPost{
+					Info:  info,
+					State: &state,
+					Error: &err,
 				},
 				&EvalUpdateStateHook{},
 			},
@@ -296,6 +321,24 @@ func (n *graphNodeOrphanResource) EvalTree() EvalNode {
 
 func (n *graphNodeOrphanResource) dependableName() string {
 	return n.ResourceName
+}
+
+// GraphNodeDestroyable impl.
+func (n *graphNodeOrphanResource) DestroyNode(mode GraphNodeDestroyMode) GraphNodeDestroy {
+	if mode != DestroyPrimary {
+		return nil
+	}
+
+	return n
+}
+
+// GraphNodeDestroy impl.
+func (n *graphNodeOrphanResource) CreateBeforeDestroy() bool {
+	return false
+}
+
+func (n *graphNodeOrphanResource) CreateNode() dag.Vertex {
+	return n
 }
 
 // Same as graphNodeOrphanResource, but for flattening
@@ -312,4 +355,28 @@ func (n *graphNodeOrphanResourceFlat) Name() string {
 
 func (n *graphNodeOrphanResourceFlat) Path() []string {
 	return n.PathValue
+}
+
+// GraphNodeDestroyable impl.
+func (n *graphNodeOrphanResourceFlat) DestroyNode(mode GraphNodeDestroyMode) GraphNodeDestroy {
+	if mode != DestroyPrimary {
+		return nil
+	}
+
+	return n
+}
+
+// GraphNodeDestroy impl.
+func (n *graphNodeOrphanResourceFlat) CreateBeforeDestroy() bool {
+	return false
+}
+
+func (n *graphNodeOrphanResourceFlat) CreateNode() dag.Vertex {
+	return n
+}
+
+func (n *graphNodeOrphanResourceFlat) ProvidedBy() []string {
+	return modulePrefixList(
+		n.graphNodeOrphanResource.ProvidedBy(),
+		modulePrefixStr(n.PathValue))
 }

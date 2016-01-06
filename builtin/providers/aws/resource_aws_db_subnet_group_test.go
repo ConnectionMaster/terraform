@@ -36,6 +36,68 @@ func TestAccAWSDBSubnetGroup_basic(t *testing.T) {
 	})
 }
 
+// Regression test for https://github.com/hashicorp/terraform/issues/2603 and
+// https://github.com/hashicorp/terraform/issues/2664
+func TestAccAWSDBSubnetGroup_withUndocumentedCharacters(t *testing.T) {
+	var v rds.DBSubnetGroup
+
+	testCheck := func(*terraform.State) error {
+		return nil
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckDBSubnetGroupDestroy,
+		Steps: []resource.TestStep{
+			resource.TestStep{
+				Config: testAccDBSubnetGroupConfig_withUnderscoresAndPeriodsAndSpaces,
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckDBSubnetGroupExists(
+						"aws_db_subnet_group.underscores", &v),
+					testAccCheckDBSubnetGroupExists(
+						"aws_db_subnet_group.periods", &v),
+					testAccCheckDBSubnetGroupExists(
+						"aws_db_subnet_group.spaces", &v),
+					testCheck,
+				),
+			},
+		},
+	})
+}
+
+func TestResourceAWSDBSubnetGroupNameValidation(t *testing.T) {
+	cases := []struct {
+		Value    string
+		ErrCount int
+	}{
+		{
+			Value:    "tEsting",
+			ErrCount: 1,
+		},
+		{
+			Value:    "testing?",
+			ErrCount: 1,
+		},
+		{
+			Value:    "default",
+			ErrCount: 1,
+		},
+		{
+			Value:    randomString(300),
+			ErrCount: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		_, errors := validateSubnetGroupName(tc.Value, "aws_db_subnet_group")
+
+		if len(errors) != tc.ErrCount {
+			t.Fatalf("Expected the DB Subnet Group name to trigger a validation error")
+		}
+	}
+}
+
 func testAccCheckDBSubnetGroupDestroy(s *terraform.State) error {
 	conn := testAccProvider.Meta().(*AWSClient).rdsconn
 
@@ -119,8 +181,47 @@ resource "aws_subnet" "bar" {
 }
 
 resource "aws_db_subnet_group" "foo" {
-	name = "FOO"
+	name = "foo"
 	description = "foo description"
 	subnet_ids = ["${aws_subnet.foo.id}", "${aws_subnet.bar.id}"]
+	tags {
+		Name = "tf-dbsubnet-group-test"
+	}
+}
+`
+
+const testAccDBSubnetGroupConfig_withUnderscoresAndPeriodsAndSpaces = `
+resource "aws_vpc" "main" {
+    cidr_block = "192.168.0.0/16"
+}
+
+resource "aws_subnet" "frontend" {
+    vpc_id = "${aws_vpc.main.id}"
+    availability_zone = "us-west-2b"
+    cidr_block = "192.168.1.0/24"
+}
+
+resource "aws_subnet" "backend" {
+    vpc_id = "${aws_vpc.main.id}"
+    availability_zone = "us-west-2c"
+    cidr_block = "192.168.2.0/24"
+}
+
+resource "aws_db_subnet_group" "underscores" {
+    name = "with_underscores"
+    description = "Our main group of subnets"
+    subnet_ids = ["${aws_subnet.frontend.id}", "${aws_subnet.backend.id}"]
+}
+
+resource "aws_db_subnet_group" "periods" {
+    name = "with.periods"
+    description = "Our main group of subnets"
+    subnet_ids = ["${aws_subnet.frontend.id}", "${aws_subnet.backend.id}"]
+}
+
+resource "aws_db_subnet_group" "spaces" {
+    name = "with spaces"
+    description = "Our main group of subnets"
+    subnet_ids = ["${aws_subnet.frontend.id}", "${aws_subnet.backend.id}"]
 }
 `

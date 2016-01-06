@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/terraform/terraform"
 )
 
-func TestAccAwsVpnConnectionRoute_basic(t *testing.T) {
+func TestAccAWSVpnConnectionRoute_basic(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		PreCheck:     func() { testAccPreCheck(t) },
 		Providers:    testAccProviders,
@@ -85,7 +85,7 @@ func testAccAwsVpnConnectionRoute(
 
 		ec2conn := testAccProvider.Meta().(*AWSClient).ec2conn
 
-		_, err := ec2conn.DescribeVPNConnections(&ec2.DescribeVPNConnectionsInput{
+		_, err := ec2conn.DescribeVpnConnections(&ec2.DescribeVpnConnectionsInput{
 			Filters: routeFilters,
 		})
 		if err != nil {

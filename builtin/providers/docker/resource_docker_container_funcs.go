@@ -4,10 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
+	"time"
 
 	dc "github.com/fsouza/go-dockerclient"
 	"github.com/hashicorp/terraform/helper/schema"
+)
+
+var (
+	creationTime time.Time
 )
 
 func resourceDockerContainerCreate(d *schema.ResourceData, meta interface{}) error {
@@ -23,9 +27,8 @@ func resourceDockerContainerCreate(d *schema.ResourceData, meta interface{}) err
 	if _, ok := data.DockerImages[image]; !ok {
 		if _, ok := data.DockerImages[image+":latest"]; !ok {
 			return fmt.Errorf("Unable to find image %s", image)
-		} else {
-			image = image + ":latest"
 		}
+		image = image + ":latest"
 	}
 
 	// The awesome, wonderful, splendiferous, sensical
@@ -48,6 +51,10 @@ func resourceDockerContainerCreate(d *schema.ResourceData, meta interface{}) err
 
 	if v, ok := d.GetOk("command"); ok {
 		createOpts.Config.Cmd = stringListToStringSlice(v.([]interface{}))
+	}
+
+	if v, ok := d.GetOk("entrypoint"); ok {
+		createOpts.Config.Entrypoint = stringListToStringSlice(v.([]interface{}))
 	}
 
 	exposedPorts := map[dc.Port]struct{}{}
@@ -74,19 +81,20 @@ func resourceDockerContainerCreate(d *schema.ResourceData, meta interface{}) err
 		createOpts.Config.Volumes = volumes
 	}
 
-	var retContainer *dc.Container
-	if retContainer, err = client.CreateContainer(createOpts); err != nil {
-		return fmt.Errorf("Unable to create container: %s", err)
+	if v, ok := d.GetOk("labels"); ok {
+		createOpts.Config.Labels = mapTypeMapValsToString(v.(map[string]interface{}))
 	}
-	if retContainer == nil {
-		return fmt.Errorf("Returned container is nil")
-	}
-
-	d.SetId(retContainer.ID)
 
 	hostConfig := &dc.HostConfig{
-		Privileged: d.Get("privileged").(bool),
+		Privileged:      d.Get("privileged").(bool),
 		PublishAllPorts: d.Get("publish_all_ports").(bool),
+		RestartPolicy: dc.RestartPolicy{
+			Name:              d.Get("restart").(string),
+			MaximumRetryCount: d.Get("max_retry_count").(int),
+		},
+		LogConfig: dc.LogConfig{
+			Type: d.Get("log_driver").(string),
+		},
 	}
 
 	if len(portBindings) != 0 {
@@ -108,6 +116,39 @@ func resourceDockerContainerCreate(d *schema.ResourceData, meta interface{}) err
 		hostConfig.Links = stringSetToStringSlice(v.(*schema.Set))
 	}
 
+	if v, ok := d.GetOk("memory"); ok {
+		hostConfig.Memory = int64(v.(int)) * 1024 * 1024
+	}
+
+	if v, ok := d.GetOk("memory_swap"); ok {
+		swap := int64(v.(int))
+		if swap > 0 {
+			swap = swap * 1024 * 1024
+		}
+		hostConfig.MemorySwap = swap
+	}
+
+	if v, ok := d.GetOk("cpu_shares"); ok {
+		hostConfig.CPUShares = int64(v.(int))
+	}
+
+	if v, ok := d.GetOk("log_opts"); ok {
+		hostConfig.LogConfig.Config = mapTypeMapValsToString(v.(map[string]interface{}))
+	}
+
+	createOpts.HostConfig = hostConfig
+
+	var retContainer *dc.Container
+	if retContainer, err = client.CreateContainer(createOpts); err != nil {
+		return fmt.Errorf("Unable to create container: %s", err)
+	}
+	if retContainer == nil {
+		return fmt.Errorf("Returned container is nil")
+	}
+
+	d.SetId(retContainer.ID)
+
+	creationTime = time.Now()
 	if err := client.StartContainer(retContainer.ID, hostConfig); err != nil {
 		return fmt.Errorf("Unable to start container: %s", err)
 	}
@@ -118,25 +159,53 @@ func resourceDockerContainerCreate(d *schema.ResourceData, meta interface{}) err
 func resourceDockerContainerRead(d *schema.ResourceData, meta interface{}) error {
 	client := meta.(*dc.Client)
 
-	apiContainer, err := fetchDockerContainer(d.Get("name").(string), client)
+	apiContainer, err := fetchDockerContainer(d.Id(), client)
 	if err != nil {
 		return err
 	}
-
 	if apiContainer == nil {
 		// This container doesn't exist anymore
 		d.SetId("")
-
 		return nil
 	}
 
-	container, err := client.InspectContainer(apiContainer.ID)
-	if err != nil {
-		return fmt.Errorf("Error inspecting container %s: %s", apiContainer.ID, err)
+	var container *dc.Container
+
+	loops := 1 // if it hasn't just been created, don't delay
+	if !creationTime.IsZero() {
+		loops = 30 // with 500ms spacing, 15 seconds; ought to be plenty
+	}
+	sleepTime := 500 * time.Millisecond
+
+	for i := loops; i > 0; i-- {
+		container, err = client.InspectContainer(apiContainer.ID)
+		if err != nil {
+			return fmt.Errorf("Error inspecting container %s: %s", apiContainer.ID, err)
+		}
+
+		if container.State.Running ||
+			!container.State.Running && !d.Get("must_run").(bool) {
+			break
+		}
+
+		if creationTime.IsZero() { // We didn't just create it, so don't wait around
+			return resourceDockerContainerDelete(d, meta)
+		}
+
+		if container.State.FinishedAt.After(creationTime) {
+			// It exited immediately, so error out so dependent containers
+			// aren't started
+			resourceDockerContainerDelete(d, meta)
+			return fmt.Errorf("Container %s exited after creation, error was: %s", apiContainer.ID, container.State.Error)
+		}
+
+		time.Sleep(sleepTime)
 	}
 
-	if d.Get("must_run").(bool) && !container.State.Running {
-		return resourceDockerContainerDelete(d, meta)
+	// Handle the case of the for loop above running its course
+	if !container.State.Running && d.Get("must_run").(bool) {
+		resourceDockerContainerDelete(d, meta)
+		return fmt.Errorf("Container %s failed to be in running state", apiContainer.ID)
 	}
 
 	// Read Network Settings
@@ -190,7 +259,15 @@ func stringSetToStringSlice(stringSet *schema.Set) []string {
 	return ret
 }
 
-func fetchDockerContainer(name string, client *dc.Client) (*dc.APIContainers, error) {
+func mapTypeMapValsToString(typeMap map[string]interface{}) map[string]string {
+	mapped := make(map[string]string, len(typeMap))
+	for k, v := range typeMap {
+		mapped[k] = v.(string)
+	}
+	return mapped
+}
+
+func fetchDockerContainer(ID string, client *dc.Client) (*dc.APIContainers, error) {
 	apiContainers, err := client.ListContainers(dc.ListContainersOptions{All: true})
 
 	if err != nil {
@@ -198,17 +275,7 @@ func fetchDockerContainer(name string, client *dc.Client) (*dc.APIContainers, er
 	}
 
 	for _, apiContainer := range apiContainers {
-		// Sometimes the Docker API prefixes container names with /
-		// like it does in these commands. But if there's no
-		// set name, it just uses the ID without a /...ugh.
-		var dockerContainerName string
-		if len(apiContainer.Names) > 0 {
-			dockerContainerName = strings.TrimLeft(apiContainer.Names[0], "/")
-		} else {
-			dockerContainerName = apiContainer.ID
-		}
-
-		if dockerContainerName == name {
+		if apiContainer.ID == ID {
 			return &apiContainer, nil
 		}
 	}

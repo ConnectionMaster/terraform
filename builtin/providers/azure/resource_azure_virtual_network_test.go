@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/Azure/azure-sdk-for-go/management"
 	"github.com/Azure/azure-sdk-for-go/management/virtualnetwork"
 	"github.com/hashicorp/terraform/helper/resource"
 	"github.com/hashicorp/terraform/terraform"
@@ -185,6 +186,10 @@ func testAccCheckAzureVirtualNetworkDestroy(s *terraform.State) error {
 
 		nc, err := vnetClient.GetVirtualNetworkConfiguration()
 		if err != nil {
+			if management.IsResourceNotFoundError(err) {
+				// This is desirable - no configuration = no networks
+				continue
+			}
 			return fmt.Errorf("Error retrieving Virtual Network Configuration: %s", err)
 		}
 
@@ -218,7 +223,7 @@ resource "azure_security_group" "foo" {
 
 resource "azure_security_group_rule" "foo" {
 	name = "terraform-secgroup-rule"
-	security_group_name = "${azure_security_group.foo.name}"
+	security_group_names = ["${azure_security_group.foo.name}"]
 	type = "Inbound"
 	action = "Deny"
 	priority = 200
@@ -249,7 +254,7 @@ resource "azure_security_group" "foo" {
 
 resource "azure_security_group_rule" "foo" {
 	name = "terraform-secgroup-rule"
-	security_group_name = "${azure_security_group.foo.name}"
+	security_group_names = ["${azure_security_group.foo.name}"]
 	type = "Inbound"
 	action = "Deny"
 	priority = 200

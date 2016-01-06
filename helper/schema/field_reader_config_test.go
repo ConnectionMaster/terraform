@@ -122,7 +122,7 @@ func TestConfigFieldReader_DefaultHandling(t *testing.T) {
 			Config: tc.Config,
 		}
 		out, err := r.ReadField(tc.Addr)
-		if (err != nil) != tc.Err {
+		if err != nil != tc.Err {
 			t.Fatalf("%s: err: %s", name, err)
 		}
 		if s, ok := out.Value.(*Set); ok {
@@ -192,7 +192,7 @@ func TestConfigFieldReader_ComputedMap(t *testing.T) {
 			Config: tc.Config,
 		}
 		out, err := r.ReadField(tc.Addr)
-		if (err != nil) != tc.Err {
+		if err != nil != tc.Err {
 			t.Fatalf("%s: err: %s", name, err)
 		}
 		if s, ok := out.Value.(*Set); ok {
@@ -228,8 +228,8 @@ func TestConfigFieldReader_ComputedSet(t *testing.T) {
 		"set, normal": {
 			[]string{"strSet"},
 			FieldReadResult{
-				Value: map[int]interface{}{
-					2356372769: "foo",
+				Value: map[string]interface{}{
+					"2356372769": "foo",
 				},
 				Exists:   true,
 				Computed: false,
@@ -283,7 +283,7 @@ func TestConfigFieldReader_ComputedSet(t *testing.T) {
 			Config: tc.Config,
 		}
 		out, err := r.ReadField(tc.Addr)
-		if (err != nil) != tc.Err {
+		if err != nil != tc.Err {
 			t.Fatalf("%s: err: %s", name, err)
 		}
 		if s, ok := out.Value.(*Set); ok {
